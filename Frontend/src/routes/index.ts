@@ -14,6 +14,7 @@ const UserList= lazy(() => import('../pages/Users/ListUsers'));
 const UserCreate= lazy(() => import('../pages/Users/Create'));
 const UserUpdate = lazy(() => import('../pages/Users/Update'));
 const Posts= lazy(() => import('../pages/Posts/List'));
+const Mapa= lazy(() => import('../pages/Mapa/Mapa'));
 
 
 const coreRoutes = [
@@ -88,6 +89,11 @@ const coreRoutes = [
     title: 'Buttons',
     component: Buttons,
   },
+  {
+    path: '/sismos/mapa',
+    title: 'Mapa de sismos',
+    component: Mapa,
+  }
   
 ];
 
