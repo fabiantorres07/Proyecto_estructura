@@ -1,4 +1,4 @@
-import PlanoCartesiano from "../../components/mapa/Plano";
+import PlanoCartesiano from "../../components/map/Plano";
 
 const Mapa = () => {
   return (
