@@ -1,15 +1,15 @@
 import React, { useEffect, useState } from "react";
-import { Station } from "../../models/Station";
+import { Zone } from "../../models/Zone";
+import ZoneFormValidator from "../../components/zones/ZoneFormValidator";
 import GenericTable from "../../components/GenericTable";
 import Swal from "sweetalert2";
-import StationFormValidator from "../../components/stations/StationFormValidator";
 import { useNavigate } from "react-router-dom";
 import CartesianPlane from "../../components/map/Plane";
 
-const StationsDashboard: React.FC = () => {
+const ZonesDashboard: React.FC = () => {
     const navigate = useNavigate();
-    const [stations, setStations] = useState<Station[]>([]);
-    let selectedStation: Station | null = null;
+    const [zones, setZones] = useState<Zone[]>([]);
+    let selectedZone: Zone | null = null;
     let currentMode: number = 1;
 
     useEffect(() => {
@@ -19,7 +19,7 @@ const StationsDashboard: React.FC = () => {
     const fetchData = async () => {
     };
 
-    const handleAction = (action: string, item: Station) => {
+    const handleAction = (action: string, item: Zone) => {
         if (action === "edit") {
             console.log("Edit post:", item);
         } else if (action === "delete") {
@@ -27,7 +27,7 @@ const StationsDashboard: React.FC = () => {
         }
     };
 
-    const handleStationForm = async (station: Station) => {
+    const handleZoneForm = async (zone: Zone) => {
 
         if (currentMode === 1){
 
@@ -102,17 +102,17 @@ const StationsDashboard: React.FC = () => {
             <div className="grid grid-cols-[30%_70%] gap-6">
 
                 <div>
-                    <StationFormValidator
-                        station={selectedStation ? selectedStation : null}
+                    <ZoneFormValidator
+                        zone={selectedZone ? selectedZone : null}
                         mode={currentMode}
-                        handleAction={handleStationForm}
+                        handleAction={handleZoneForm}
                     />
                 </div>
 
                 <div className="min-w-0">
                     <GenericTable
-                        data={stations}
-                        columns={["id", "x", "y"]}
+                        data={zones}
+                        columns={["name", "x_min", "y_min", "x_max", "y_max"]}
                         actions={[
                             { name: "select", label: "Seleccionar" },
                             { name: "delete", label: "Borrar" },
@@ -131,6 +131,6 @@ const StationsDashboard: React.FC = () => {
     );
 };
 
-export default StationsDashboard;
+export default ZonesDashboard;
 
 

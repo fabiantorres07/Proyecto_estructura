@@ -18,6 +18,7 @@ const Mapa= lazy(() => import('../pages/Map/Map'));
 const CreateReport = lazy(() => import('../pages/Reports/Create'));
 const ReportQueue = lazy(()=>import('../pages/Reports/Queue'))
 const StationsDashboard = lazy(()=>import('../pages/Station/StationsDashboard'))
+const ZonesDashboard = lazy(()=> import('../pages/Zones/ZonesDashboard'))
 
 const coreRoutes = [
   {
@@ -110,6 +111,11 @@ const coreRoutes = [
     path: '/estaciones/dashboard',
     title: 'Panel de estaciones',
     component: StationsDashboard,
+  },
+  {
+    path: '/zonas/dashboard',
+    title: 'Panel de zonas',
+    component: ZonesDashboard,
   }
   
 ];
