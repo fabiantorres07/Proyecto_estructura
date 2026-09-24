@@ -115,11 +115,11 @@ function CartesianPlane() {
           {Array.from({ length: GRID_SIZE + 1 }, (_, i) => (
             <Text
               key={`x-label-${i}`}
-              x={originX + i * CELL_SIZE - 12}
+              x={originX + i * CELL_SIZE - 20}
               y={originY + 14}
               text={String(i * GRID_STEP_KM)}
               fontSize={13}
-              width={24}
+              width={40}
               align="center"
             />
           ))}
