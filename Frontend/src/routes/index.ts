@@ -17,7 +17,7 @@ const Posts= lazy(() => import('../pages/Posts/List'));
 const Mapa= lazy(() => import('../pages/Map/Map'));
 const CreateReport = lazy(() => import('../pages/Reports/Create'));
 const ReportQueue = lazy(()=>import('../pages/Reports/Queue'))
-
+const StationsDashboard = lazy(()=>import('../pages/Station/StationsDashboard'))
 
 const coreRoutes = [
   {
@@ -105,6 +105,11 @@ const coreRoutes = [
     path: '/reportes/cola',
     title: 'Cola de reportes',
     component: ReportQueue,
+  },
+  {
+    path: '/estaciones/dashboard',
+    title: 'Panel de estaciones',
+    component: StationsDashboard,
   }
   
 ];
