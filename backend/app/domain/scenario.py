@@ -1,7 +1,12 @@
-from domain.event import Event
+from app.domain.event import Event
 from enum import Enum
 from datetime import datetime, timezone
 from typing import Optional
+from app.domain.zone import Zone
+from app.domain.station import Station
+from app.structures.avl_node import AVLNode
+from app.structures.stack import Stack
+from app.structures.queue import Queue 
 
 # El siguiente enum se usa para definir el modo del escenario
 #Como en teoria se inicializa en modo normal pues aja por eso esta aqui metido
@@ -9,16 +14,16 @@ class Mode(Enum):
     NORMAL = "Normal"
     STRESS = "Stress"
 
-class scenario:
+class Scenario:
 
-    def __init__(self, eliminated_IDs: Optional[set[int]] = None, archived_history: Optional[dict[int, Event]] = None, simulationClock: Optional[datetime] = None,  L: int=3, W: float = 48.0, R: float = 40.0, T: float = 72.0, Mode: Mode = Mode.Normal):
+    def __init__(self, metrics : Optional[dict[str, int]] = None, event_index : Optional[dict[int, AVLNode]] = None, stations : Optional[dict[int, Station]] = None, zones: Optional[list[Zone]] = None, eliminated_IDs: Optional[set[int]] = None, archived_history: Optional[dict[int, Event]] = None, simulation_clock: Optional[datetime] = None,  L: int=3, W: float = 48.0, R: float = 40.0, T: float = 72.0, mode: Mode = Mode.NORMAL, undo_stack: Optional[Stack] = None, report_queue: Optional[Queue] = None):
 
         #Colecciones de eliminación e histórico
-        self.eliminated_IDs: set[int] = eliminated_IDs
-        self.archived_history: dict[int, Event]= archived_history
+        self.eliminated_IDs = eliminated_IDs if eliminated_IDs is not None else set()
+        self.archived_history = archived_history if archived_history is not None else dict()
 
         #Reloj de Simulación precisión en segundos, Si no se provee uno, toma la hora UTC actual del sistema
-        self.simulationClock: datetime = ( simulationClock or datetime.now(timezone.utc).replace(microsecond=0) )
+        self.simulation_clock: datetime = simulation_clock or datetime.now(timezone.utc).replace(microsecond=0)
 
         #Parámetros globales configurables
         self.L= L #Limite inicialmente 3
@@ -27,8 +32,13 @@ class scenario:
         self.R= R
         self.T= T
 
-        #
-
+        self.mode = mode 
+        self.zones = zones if zones is not None else list()
+        self.stations = stations if stations is not None else dict()
+        self.event_index = event_index if event_index is not None else dict()
+        self.metrics = metrics if metrics is not None else dict()
+        self.undo_stack = undo_stack if undo_stack is not None else Stack()
+        self.report_queue = report_queue if report_queue is not None else Queue()
 
 
 
