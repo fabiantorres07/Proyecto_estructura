@@ -1,6 +1,9 @@
 from fastapi import FastAPI
+from app.api.zones import router as zones_router
 
 app = FastAPI()
+
+app.include_router(zones_router)
 
 @app.get("/")
 def read_root():

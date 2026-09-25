@@ -40,6 +40,50 @@ class Scenario:
         self.undo_stack = undo_stack if undo_stack is not None else Stack()
         self.report_queue = report_queue if report_queue is not None else Queue()
 
+    def add_zone(self, zone: Zone):
+        """This method is called to add a zone to the scenario. It checks if there is another existing zone with the same name, and if there isn't, then the new zone is added"""
+
+        if any(existing.name == zone.name for existing in self.zones):
+            raise ValueError("A zone with this name already exist")
+        
+        self.zones.append(zone)
+        return zone
+
+    def get_zone(self, zone_name: str) -> Zone:
+        for zone in self.zones:
+            if zone.name == zone_name:
+                return zone
+
+        raise KeyError(f"Zone '{zone_name}' was not found")
+
+    def list_zones(self) -> list[Zone]:
+        return self.zones
+
+    def update_zone(self, zone_name: str, changes: dict) -> Zone:
+        current_zone = self.get_zone(zone_name)
+        updated_values = {
+            "name": changes.get("name", current_zone.name),
+            "x_min": changes.get("x_min", current_zone.x_min),
+            "x_max": changes.get("x_max", current_zone.x_max),
+            "y_min": changes.get("y_min", current_zone.y_min),
+            "y_max": changes.get("y_max", current_zone.y_max),
+            "is_populated": changes.get("is_populated", current_zone.is_populated),
+        }
+
+        if updated_values["name"] != zone_name and any(
+            zone.name == updated_values["name"] for zone in self.zones
+        ):
+            raise ValueError("A zone with this name already exists")
+
+        updated_zone = Zone(**updated_values)
+        zone_index = self.zones.index(current_zone)
+        self.zones[zone_index] = updated_zone
+        return updated_zone
+
+    def delete_zone(self, zone_name: str) -> None:
+        zone = self.get_zone(zone_name)
+        self.zones.remove(zone)
+
 
 
 
