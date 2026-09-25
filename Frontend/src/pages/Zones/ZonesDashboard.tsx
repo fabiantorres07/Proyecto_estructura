@@ -8,8 +8,8 @@ import CartesianPlane from "../../components/map/Plane";
 
 const ZonesDashboard: React.FC = () => {
     const [zones, setZones] = useState<Zone[]>([]);
-    let selectedZone: Zone | null = null;
-    let currentMode: number = 1; //1 = create, 2 = edit
+    const [selectedZone, setSelectedZone] = useState<Zone | null>(null);
+    const [currentMode, setCurrentMode] = useState(1); //1 = create, 2 = edit
 
     useEffect(() => {
         fetchData();
@@ -22,8 +22,8 @@ const ZonesDashboard: React.FC = () => {
 
     const handleAction = async (action: string, item: Zone) => {
         if (action === "select") {
-            currentMode = 2;
-            selectedZone = item;
+            setCurrentMode(2);
+            setSelectedZone(item);
         } else if (action === "delete") {
             if (!item.name) {
                 return;
@@ -41,7 +41,8 @@ const ZonesDashboard: React.FC = () => {
                     })
 
                     await fetchData();
-                    selectedZone = null;
+                    setSelectedZone(null);
+                    setCurrentMode(1);
 
                 }
                 else {
@@ -81,7 +82,8 @@ const ZonesDashboard: React.FC = () => {
                     })
 
                     await fetchData();
-                    selectedZone = zones.find(SearchedZone => zone.name === SearchedZone.name) ?? null;
+                    setSelectedZone(createdZone);
+                    setCurrentMode(2);
 
                 }
                 else {
@@ -121,7 +123,7 @@ const ZonesDashboard: React.FC = () => {
                     })
 
                     await fetchData();
-                    selectedZone = zones.find(SearchedZone => zone.name === SearchedZone.name) ?? null;
+                    setSelectedZone(updatedZone);
 
                 }
                 else {
@@ -146,32 +148,32 @@ const ZonesDashboard: React.FC = () => {
     };
 
     function handleDeselect(){
-        currentMode = 1;
-        selectedZone = null;
+        setCurrentMode(1);
+        setSelectedZone(null);
     }
 
     return (
         <div className="w-full space-y-6">
 
             {/* Arriba: Form 30% + Tabla 70% */}
-            <div className="grid grid-cols-[30%_70%] gap-6">
+            <div className="grid min-w-0 grid-cols-[minmax(0,3fr)_minmax(0,7fr)] gap-6">
 
-                <div>
+                <div className="min-w-0">
                     <ZoneFormValidator
                         zone={selectedZone ? selectedZone : null}
                         mode={currentMode}
                         handleAction={handleZoneForm}
                     />
+                    {selectedZone && (
+                        <button
+                            type="button"
+                            onClick={handleDeselect}
+                            className="mt-4 w-full rounded-md bg-meta-1 px-4 py-2 font-medium text-white hover:bg-opacity-90"
+                        >
+                            Deseleccionar
+                        </button>
+                    )}
                 </div>
-                {selectedZone && (
-                    <button
-                        type="button"
-                        onClick={handleDeselect}
-                        className="mt-4 w-full rounded-md bg-gray-500 px-4 py-2 text-white hover:bg-gray-600"
-                    >
-                        Deseleccionar
-                    </button>
-                )}
 
                 <div className="min-w-0">
                     <GenericTable
@@ -188,7 +190,7 @@ const ZonesDashboard: React.FC = () => {
             </div>
 
             <div className="w-full h-[50vh]">
-                <CartesianPlane />
+                <CartesianPlane zones={zones} selectedZone={selectedZone} />
             </div>
 
         </div>

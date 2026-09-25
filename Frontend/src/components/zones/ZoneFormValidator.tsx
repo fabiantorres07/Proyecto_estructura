@@ -11,6 +11,7 @@ interface MyFormProps {
 const ZoneFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, zone }) => {
     return (
         <Formik
+            enableReinitialize
             initialValues={ //Either the existing zone values are filled out, or the boxes come empty if said zone does not exist
                 zone
                     ? {
@@ -48,7 +49,7 @@ const ZoneFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, zone }) 
             >
                 <div>
                     <label
-                        htmlFor="Name"
+                        htmlFor="name"
                         className="block text-lg font-medium text-gray-700"
                     >
                         Nombre de zona
@@ -56,12 +57,12 @@ const ZoneFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, zone }) 
 
                     <Field
                         type="text"
-                        name="Name"
+                        name="name"
                         className="w-full border border-gray-300 rounded-md p-2"
                     />
 
                     <ErrorMessage
-                        name="Name"
+                        name="name"
                         component="p"
                         className="text-danger text-sm"
                     />

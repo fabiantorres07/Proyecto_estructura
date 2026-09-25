@@ -16,14 +16,14 @@ const GenericTable: React.FC<GenericTableProps> = ({ data, columns, actions, onA
     return (
         <div className="rounded-sm border border-stroke bg-white shadow-default dark:border-strokedark dark:bg-boxdark">
             <div className="max-w-full overflow-x-auto">
-                <table className="w-full table-auto">
+                <table className="w-full table-fixed">
                     <thead>
                         <tr className="bg-gray-2 text-left dark:bg-meta-4">
                             {columns.map((col, index) => (
                                 <th
                                     key={col}
-                                    className={`py-4 px-4 font-medium text-black dark:text-white ${
-                                        index === 0 ? "min-w-[220px] xl:pl-11" : "min-w-[150px]"
+                                    className={`break-words py-4 px-4 font-medium text-black dark:text-white ${
+                                        index === 0 ? "xl:pl-11" : ""
                                     }`}
                                 >
                                     {col}
@@ -41,7 +41,7 @@ const GenericTable: React.FC<GenericTableProps> = ({ data, columns, actions, onA
                                 {columns.map((col, colIndex) => (
                                     <td
                                         key={col}
-                                        className={`border-b border-[#eee] py-5 px-4 dark:border-strokedark ${
+                                        className={`break-words border-b border-[#eee] py-5 px-4 dark:border-strokedark ${
                                             colIndex === 0 ? "pl-9 xl:pl-11" : ""
                                         }`}
                                     >
@@ -52,7 +52,7 @@ const GenericTable: React.FC<GenericTableProps> = ({ data, columns, actions, onA
                                 ))}
 
                                 <td className="border-b border-[#eee] py-5 px-4 dark:border-strokedark">
-                                    <div className="flex items-center space-x-3.5">
+                                    <div className="flex flex-wrap items-center gap-3.5">
                                         {actions.map((action) => (
                                             <button
                                                 key={action.name}

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Stage, Layer, Line, Text } from "react-konva";
-import Zone from "./Zone";
+import MapZone from "./MapZone";
 import Event from "./Event";
+import { Zone } from "../../models/Zone";
 
 const GRID_SIZE = 10;
 const CELL_SIZE = 50;
@@ -11,7 +12,12 @@ const MIN_SCALE = 0.5;
 const MAX_SCALE = 3;
 const ZOOM_STEP = 1.2;
 
-function CartesianPlane() {
+interface CartesianPlaneProps {
+  zones?: Zone[];
+  selectedZone?: Zone | null;
+}
+
+function CartesianPlane({ zones = [], selectedZone = null }: CartesianPlaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [size, setSize] = useState({
@@ -154,7 +160,16 @@ function CartesianPlane() {
             align="center"
           />
 
-          <Zone />
+          {zones.map((zone, index) => (
+            <MapZone
+              key={zone.name || `${zone.x_min}-${zone.y_min}-${index}`}
+              zone={zone}
+              selected={
+                selectedZone === zone ||
+                (selectedZone?.name != null && selectedZone.name === zone.name)
+              }
+            />
+          ))}
           <Event />
         </Layer>
       </Stage>

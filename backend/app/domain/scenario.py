@@ -50,6 +50,7 @@ class Scenario:
         return zone
 
     def get_zone(self, zone_name: str) -> Zone:
+        """This method returns the zone with the name that is being searched"""
         for zone in self.zones:
             if zone.name == zone_name:
                 return zone
@@ -57,9 +58,11 @@ class Scenario:
         raise KeyError(f"Zone '{zone_name}' was not found")
 
     def list_zones(self) -> list[Zone]:
+        """This method returns the list of zones of the scenario"""
         return self.zones
 
     def update_zone(self, zone_name: str, changes: dict) -> Zone:
+        """This method is called to update the data of a zone that already exists"""
         current_zone = self.get_zone(zone_name)
         updated_values = {
             "name": changes.get("name", current_zone.name),
@@ -81,6 +84,7 @@ class Scenario:
         return updated_zone
 
     def delete_zone(self, zone_name: str) -> None:
+        """This method deletes a zone"""
         zone = self.get_zone(zone_name)
         self.zones.remove(zone)
 
