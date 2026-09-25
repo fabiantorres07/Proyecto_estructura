@@ -1,99 +1,154 @@
 import React, { useEffect, useState } from "react";
 import { Zone } from "../../models/Zone";
 import ZoneFormValidator from "../../components/zones/ZoneFormValidator";
+import { zoneService } from "../../services/zoneService";
 import GenericTable from "../../components/GenericTable";
 import Swal from "sweetalert2";
-import { useNavigate } from "react-router-dom";
 import CartesianPlane from "../../components/map/Plane";
 
 const ZonesDashboard: React.FC = () => {
-    const navigate = useNavigate();
     const [zones, setZones] = useState<Zone[]>([]);
     let selectedZone: Zone | null = null;
-    let currentMode: number = 1;
+    let currentMode: number = 1; //1 = create, 2 = edit
 
     useEffect(() => {
         fetchData();
     }, []);
 
     const fetchData = async () => {
+        const zones = await zoneService.getZones();
+        setZones(zones)
     };
 
-    const handleAction = (action: string, item: Zone) => {
-        if (action === "edit") {
-            console.log("Edit post:", item);
+    const handleAction = async (action: string, item: Zone) => {
+        if (action === "select") {
+            currentMode = 2;
+            selectedZone = item;
         } else if (action === "delete") {
-            console.log("Delete post:", item);
+            if (!item.name) {
+                return;
+            }
+            try{
+                const deletedZone = await zoneService.deleteZone(item.name)
+                if (deletedZone){
+                    Swal.fire({
+                        toast: true,
+                        position: "top-end",
+                        icon: "success",
+                        title: "Zona eliminada",
+                        text: `Se ha eliminado la zona ${item.name}`,
+                        timer: 3000
+                    })
+
+                    await fetchData();
+                    selectedZone = null;
+
+                }
+                else {
+                    Swal.fire({
+                        title: "Error",
+                        text: "La zona no se ha podido eliminar",
+                        icon: "error",
+                        timer: 3000
+                    })
+                }
+            }
+            catch (error) {
+                Swal.fire({
+                    title: "Error",
+                    text: `Ha habido un error eliminando la zona: ${error}`,
+                    icon: "error",
+                    timer: 3000
+                })
+            }
+
         }
     };
 
     const handleZoneForm = async (zone: Zone) => {
 
         if (currentMode === 1){
+            try{
+                const createdZone = await zoneService.createZone(zone)
+                if (createdZone){
+                    Swal.fire({
+                        toast: true,
+                        position: "top-end",
+                        icon: "success",
+                        title: "Zona creada",
+                        text: `Se ha creado la zona ${zone.name}`,
+                        timer: 3000
+                    })
 
-        }
+                    await fetchData();
+                    selectedZone = zones.find(SearchedZone => zone.name === SearchedZone.name) ?? null;
 
-        else {
-
-        }
-        try {
-            const createdUser = await userService.createUser(user);
-            if (createdUser) {
-                Swal.fire({
-                    title: "Completado",
-                    text: "Se ha creado correctamente el registro",
-                    icon: "success",
-                    timer: 3000
-                })
-                console.log("Usuario creado con éxito:", createdUser);
-                navigate("/Users/List");
-            } else {
+                }
+                else {
+                    Swal.fire({
+                        title: "Error",
+                        text: "La zona no se ha podido crear",
+                        icon: "error",
+                        timer: 3000
+                    })
+                }
+            }
+            catch (error) {
                 Swal.fire({
                     title: "Error",
-                    text: "Existe un problema al momento de crear el registro",
+                    text: `Ha habido un error creando la zona: ${error}`,
                     icon: "error",
                     timer: 3000
                 })
             }
-        } catch (error) {
-            Swal.fire({
-                title: "Error",
-                text: "Existe un problema al momento de crear el registro",
-                icon: "error",
-                timer: 3000
-            })
+
+        }
+
+        else if (currentMode === 2){
+            if (!selectedZone?.name) {
+                return;
+            }
+            try{
+                const updatedZone = await zoneService.updateZone(selectedZone.name,zone)
+                if (updatedZone){
+                    Swal.fire({
+                        toast: true,
+                        position: "top-end",
+                        icon: "success",
+                        title: "Zona actualizada",
+                        text: `Se ha actualizado la zona ${zone.name}`,
+                        timer: 3000
+                    })
+
+                    await fetchData();
+                    selectedZone = zones.find(SearchedZone => zone.name === SearchedZone.name) ?? null;
+
+                }
+                else {
+                    Swal.fire({
+                        title: "Error",
+                        text: "La zona no se ha podido actualizar",
+                        icon: "error",
+                        timer: 3000
+                    })
+                }
+            }
+            catch (error) {
+                Swal.fire({
+                    title: "Error",
+                    text: `Ha habido un error creando la actualizando: ${error}`,
+                    icon: "error",
+                    timer: 3000
+                })
+            }
+
         }
     };
 
-    const deletePost = async (id: number) => {
-        Swal.fire({
-            title: "¿Estás seguro que quiere eliminar?",
-            text: "¡No podrás revertir esto!",
-            icon: "warning",
-            showCancelButton: true,
-            confirmButtonColor: "#3085d6",
-            cancelButtonColor: "#d33",
-        }).then(async (result) => {
-            if (result.isConfirmed) {
-                const success = await postService.deletePost(id);
-                if (success) {
-                    Swal.fire(
-                        "¡Eliminado!",
-                        "El post ha sido eliminado.",
-                        "success"
-                    );
-                    fetchData();
-                } else {
-                    console.error("Error al eliminar el post con id:", id);
-                    Swal.fire({
-                        icon: "error",
-                        title: "Error",
-                        text: "No se pudo eliminar el post. Por favor, inténtalo de nuevo.",
-                    });
-                }
-            }
-        });
-    };
+    function handleDeselect(){
+        currentMode = 1;
+        selectedZone = null;
+    }
 
     return (
         <div className="w-full space-y-6">
@@ -108,6 +163,15 @@ const ZonesDashboard: React.FC = () => {
                         handleAction={handleZoneForm}
                     />
                 </div>
+                {selectedZone && (
+                    <button
+                        type="button"
+                        onClick={handleDeselect}
+                        className="mt-4 w-full rounded-md bg-gray-500 px-4 py-2 text-white hover:bg-gray-600"
+                    >
+                        Deseleccionar
+                    </button>
+                )}
 
                 <div className="min-w-0">
                     <GenericTable
