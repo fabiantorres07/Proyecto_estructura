@@ -86,9 +86,9 @@ backend/
 └── app/
     ├── domain/              (lógica de negocio, sin saber nada de HTTP/FastAPI)
     │   ├── event.py         (clase Event, enum AttentionStatus)
-    │   ├── report.py        (clase Report — pendiente)
-    │   ├── station.py       (clase Station — pendiente)
-    │   ├── zone.py          (clase Zone — pendiente)
+    │   ├── report.py        (clase Report)
+    │   ├── station.py       (clase Station)
+    │   ├── zone.py          (clase Zone)
     │   └── scenario.py      (clase Scenario, estado global — pendiente)
     ├── structures/          (estructuras de datos genéricas, reutilizables)
     │   ├── avl_node.py / avl_tree.py   (AVLNode, AVLTree — pendiente)
@@ -114,6 +114,7 @@ Para quienes del equipo son nuevos en backend/Python/FastAPI:
 - **Sin base de datos**: todo el estado vive en memoria (en nuestras propias estructuras: el AVL, la cola, la pila, etc.) mientras el programa corre. La persistencia entre ejecuciones se hace exportando/importando archivos JSON, no una base de datos.
 - **pydantic / schemas**: FastAPI usa pydantic para validar automáticamente los datos que llegan (por ejemplo, "la magnitud debe ser un número entre -2.0 y 10.0"), basándose en las anotaciones de tipo.
 - **`@property` / `@x.setter`**: la forma en que Python expone valores calculados (como `Event.priority`, calculado a partir de otros campos) o asignación controlada de atributos, sin necesidad de métodos `getX()`/`setX()` como en Java — en Python se sigue escribiendo `evento.priority` o `evento.magnitude = valor` como si fueran atributos normales.
+- **`set`, `__eq__` y `__hash__`**: un `set` es una colección sin duplicados que usa una tabla hash por dentro (por eso "¿está esto adentro?" es O(1) promedio, en vez de recorrer todo como en una lista). Para que un objeto propio (como `Station`) funcione bien en un `set`, hay que decirle a Python cómo compararlos (`__eq__`) y cómo calcular su "posición" en la tabla hash (`__hash__`) — si no se sobrescriben, Python usa identidad de memoria por defecto, y dos objetos que representan "lo mismo" en la vida real (mismo `station_id`, por ejemplo) no se reconocerían como duplicados.
 
  Si algo no se entiende, pregúntenle a quien haya llevado esa sesión, o repasen la conversación — la idea es que todo el equipo entienda el backend, no solo quien lo escribió.
 
@@ -125,20 +126,30 @@ Para quienes del equipo son nuevos en backend/Python/FastAPI:
 - Entorno virtual de Python, FastAPI + Uvicorn instalados, `requirements.txt` generado.
 - Servidor mínimo de FastAPI (`main.py`) con un endpoint de prueba.
 - Estructura de carpetas del proyecto bajo `app/` creada.
-- Clase de dominio `Event` implementada: atributos base (`event_id`, `magnitude`, `depth`, `x`, `y`, `occurred_at`, `revision`, `stations`, `is_in_populated_zone`, `attention_status`), el enum `AttentionStatus` (`PENDING`/`REVIEWED`), y dos propiedades derivadas: `priority` (reglas de la sección 4 del enunciado) y `key` (la clave de orden del AVL, `K = (priority, magnitude, event_id)`).
+- Clase de dominio `Event` implementada por completo: atributos base (`event_id`, `magnitude`, `depth`, `x`, `y`, `occurred_at`, `revision`, `stations`, `is_in_populated_zone`, `attention_status`), el enum `AttentionStatus` (`PENDING`/`REVIEWED`), dos propiedades derivadas (`priority` y `key`, la clave de orden del AVL `K = (priority, magnitude, event_id)`), y los dos métodos de transición de estado:
+  - `mark_as_reviewed()`: marca el evento como revisado; idempotente, no cambia la clave.
+  - `apply_correction(magnitude=None, depth=None, x=None, y=None, is_in_populated_zone=None)`: aplica una corrección parcial o total. Valida coherencia interna antes de tocar nada (si cambia el epicentro, exige que también venga la zona recalculada), se ejecuta en dos fases (validar todo en variables locales, y solo después aplicar) para que una corrección inválida no deje el evento a medias, siempre incrementa `revision` y vuelve el evento a `PENDING`, y devuelve `(old_key, new_key)` para que quien la use decida si hay que reubicar el nodo en el AVL.
+- Clase `Station` implementada: `station_id`, `x`, `y`, con `__eq__`/`__hash__` propios basados en `station_id` (para que el conjunto de estaciones de un evento no tenga duplicados aunque se reconstruyan instancias distintas desde JSON).
+- Clase `Report` implementada: portador de datos puro (sin lógica de negocio) con `event_id`, `revision_num`, `station` (objeto `Station` ya resuelto, no un id crudo), y los datos del evento que trae el reporte (`magnitude`, `depth`, `x`, `y`, `occurred_at`).
+- Clase `Zone` implementada: rectángulo alineado a los ejes, definido por `x_min`, `x_max`, `y_min`, `y_max` (no por 4 puntos/esquinas — ver decisiones abajo), más `is_populated`, y el método `contains(x, y)` que revisa si un punto cae dentro de la zona (incluyendo el borde).
 
 **Pendiente / próximos pasos:**
 
-- Métodos de transición de estado de `Event` (`mark_as_reviewed`, aplicar una corrección que puede cambiar la clave).
-- Clases `Station`, `Zone`, `Scenario`.
+- Clase `Scenario` — el orquestador central: procesa la cola de reportes (decide entre alta nueva / revisión mayor / confirmación / conflicto / reporte antiguo), calcula `is_in_populated_zone` recorriendo todas las zonas, y coordina con el AVL y el índice por id.
 - `AVLNode`/`AVLTree`, `BSTNode`/`BSTTree`, `Stack`, `Queue`.
 - Schemas y endpoints de la API.
 - Estrategia de validación de rangos: **por ahora delegada solo a los schemas de pydantic** (no dentro de `Event`). Riesgo aceptado: la carga de escenario por topología (sección 12 del enunciado) reconstruye eventos sin pasar por la API/schemas, así que esto hay que revisarlo cuando se implemente esa carga.
 
 ## 7. Decisiones de diseño abiertas para confirmar con el equipo/profesor
 
-- **Idioma de comentarios e instrucciones**: la sección 17 del enunciado dice que los comentarios de código (y posiblemente estas instrucciones de ejecución) deberían ir en inglés. Decidimos, por ahora, mantener comentarios y este README en español para que todo el equipo lo entienda mientras aprendemos. Confirmar con el profesor antes de la entrega final si esto resta puntos, y si hace falta traducir antes de entregar.
 - **No existe una clase `Usuario`**: el enunciado no exige login ni datos de múltiples usuarios, así que no se está modelando. Avisar si esta suposición resulta incorrecta.
+- **Índice por id = diccionario, no lista ordenada**: se decidió indexar los eventos por id con un `dict` (hash map) en vez de una lista ordenada + búsqueda binaria, porque no hay ningún requisito de recorrer eventos ordenados por id — un diccionario da inserción/búsqueda/eliminación O(1) promedio sin pagar el costo de mantener el orden bajo cambios.
+- **No hay una pila/historial de revisiones dentro de `Event`**: se consideró agregar una (una especie de bitácora de correcciones aceptadas por evento) y se descartó — lo que aportaría ya está cubierto por el contador `revision` de `Event` más la pila de deshacer global de `Scenario` (la única pila que exige el enunciado).
+- **`Station` no guarda qué eventos ha reportado**: se descartó ese atributo porque el enunciado dice explícitamente que las estaciones son inmutables durante la ejecución, y un atributo así se iría modificando con cada reporte aceptado. Tampoco hay ninguna consulta obligatoria que lo necesite.
+- **`Station.x`/`Station.y`** (ubicación de la estación): no está siendo usada todavía por ninguna regla obligatoria del enunciado (no confundir con el epicentro del evento, que es lo que sí determina la zona poblada). Queda como decisión abierta a justificar o retirar más adelante.
+- **La comparación de "igualdad de datos" entre un reporte entrante y el evento vigente** (necesaria para distinguir una confirmación de un conflicto, sección "Procesamiento de reportes recibidos" del enunciado) va a vivir en `Scenario`, no como método de `Report` ni de `Event` — evita que esas dos clases tengan que conocerse mutuamente. Al implementarla, ojo con comparar decimales usando `==` directo: puede fallar por precisión de punto flotante, así que probablemente haga falta redondear antes de comparar.
+- **`Zone` se representa con los 4 límites del rectángulo (`x_min`/`x_max`/`y_min`/`y_max`)**, no con 4 puntos/esquinas — al ser un rectángulo alineado a los ejes, las esquinas se derivan matemáticamente de esos 4 números; guardarlas por separado sería redundante y permitiría representar un rectángulo inconsistente.
+- **La regla de "borde compartido entre dos zonas"** (un epicentro en el borde de dos zonas se clasifica como poblado si alguna de las dos lo es) va a vivir en `Scenario`, que es quien tiene la lista completa de zonas — una `Zone` individual solo puede responder si el punto está dentro de sí misma.
 
 ---
 

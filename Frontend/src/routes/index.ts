@@ -14,7 +14,11 @@ const UserList= lazy(() => import('../pages/Users/ListUsers'));
 const UserCreate= lazy(() => import('../pages/Users/Create'));
 const UserUpdate = lazy(() => import('../pages/Users/Update'));
 const Posts= lazy(() => import('../pages/Posts/List'));
-
+const Mapa= lazy(() => import('../pages/Map/Map'));
+const CreateReport = lazy(() => import('../pages/Reports/Create'));
+const ReportQueue = lazy(()=>import('../pages/Reports/Queue'))
+const StationsDashboard = lazy(()=>import('../pages/Station/StationsDashboard'))
+const ZonesDashboard = lazy(()=> import('../pages/Zones/ZonesDashboard'))
 
 const coreRoutes = [
   {
@@ -88,6 +92,31 @@ const coreRoutes = [
     title: 'Buttons',
     component: Buttons,
   },
+  {
+    path: '/sismos/mapa',
+    title: 'Mapa de sismos',
+    component: Mapa,
+  },
+  {
+    path: '/reportes/crear',
+    title: 'Crear reporte',
+    component: CreateReport,
+  },
+  {
+    path: '/reportes/cola',
+    title: 'Cola de reportes',
+    component: ReportQueue,
+  },
+  {
+    path: '/estaciones/dashboard',
+    title: 'Panel de estaciones',
+    component: StationsDashboard,
+  },
+  {
+    path: '/zonas/dashboard',
+    title: 'Panel de zonas',
+    component: ZonesDashboard,
+  }
   
 ];
 
