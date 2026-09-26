@@ -29,24 +29,27 @@ class avl_tree:
     def rotation_LL(self, desbalanced):
         middle= desbalanced.left
         subtree=middle.right
+
         middle.right=desbalanced
         desbalanced.left=subtree
 
         #heights
         middle.height=(1+max(self.height(middle.left), self.height(middle.right)))
-        desbalanced=(1+max(self.height(desbalanced.left), self.height(desbalanced.right)))
+        desbalanced.height=(1+max(self.height(desbalanced.left), self.height(desbalanced.right)))
         return middle
     
     #RR
     def rotation_RR(self, desbalanced):
         middle= desbalanced.right
         subtree=middle.left
+
         middle.left=desbalanced
         desbalanced.right=subtree
 
         #heights
-        middle.height=(1+max(self.height(middle.right), self.height(middle.left)))
-        desbalanced=(1+max(self.height(desbalanced.right), self.height(desbalanced.left)))
+        middle.height=(1+max(self.height(middle.left), self.height(middle.right)))
+        desbalanced.height=(1+max(self.height(desbalanced.left), self.height(desbalanced.right)))
+
         return middle
     
     #INSERTION
@@ -59,28 +62,31 @@ class avl_tree:
 
         #se mueve al subarbol izquierdo
         if value<node.value: #value el valor que se quiere meter y node.value el nodo que ya esta, como que primero es un valor y luego al insertarse se convierte en nodo
-            left= self._insertion(left, value)
-
-            #llega un punto en la recursion que node se inserta y el nuevo node es el padre y va subiendo
-            height= 1+max(self.height(node.left), self.height(node.right)) #esto sirve para cualquier nodo asi sea nuevo height=1 o si es padre o abuelo... 
+            node.left= self._insertion(node.left, value)
 
         #se mueve al subarbol derecho
         if value>node.value:
-            right= self._insertion(right,value)
-            height= 1+max(self.height(node.left), self.height(node.right))
+            node.right= self._insertion(node.right,value)
+        # Si value == node.value, no se inserta repetido
 
+        # Actualizar altura del nodo actual
+        node.height = 1 + max(
+            self.height(node.left),
+            self.height(node.right)
+        )
 
-        bf=bf(node) #En todo el codigo node es el nodo desbalanceado
+        bf=self.bf(node) #En todo el codigo node es el nodo desbalanceado
         if bf>1 or bf<-1:
             if bf>1:
-                if value<left.value:
+                if value<node.left.value:
                     return self.rotation_LL(node) #es rotacion LL
+                
                 else: #es rotacion LR
                     #se hace giro simple izquierda
                     node.left=self.rotation_RR(node.left)
                     return self.rotation_LL(node)
             if bf<-1:
-                if value>right.value:
+                if value>node.right.value:
                     return self.rotation_RR(node) #rotation RR
                 else:
                     node.right=self.rotation_LL(node.right) #se hace rotacion RL
