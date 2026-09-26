@@ -294,56 +294,73 @@ class AVLTree:
             node = node.left_son
         return node
 
-    # TODO (VALERY) - Lista de ajustes para terminar `elimination` y
-    # que encaje con el resto del árbol y con Scenario:
-    #  1. Usar los nombres del nodo: event, left_son, right_son (no value/left/right).
-    #  2. Navegar con la clave `key` recibida, pero reconocer el nodo buscado por
-    #     node.event.event_id == key[2]. En una corrección el Event ya fue
-    #     modificado y event.key devuelve la clave nueva, mientras el nodo sigue
-    #     ubicado con la vieja: Scenario llamará delete(old_key).
-    #  3. Usar elif / else y DEVOLVER `node` también cuando se baja por la
-    #     izquierda o por la derecha (hoy devuelve None y borra subárboles).
-    #  4. Caso dos hijos: mover el NODO sucesor a la posición del eliminado
-    #     (re-enganchando punteros), NO copiar su evento. Scenario.event_index
-    #     guarda id -> AVLNode; si se copian eventos, el índice queda apuntando
-    #     al nodo equivocado. (En BSTTree.delete hay un ejemplo recursivo.)
-    #  5. Enganchar hijos siempre con self._set_left / self._set_right, para
-    #     mantener `parent` correcto.
-    #  6. En el camino de regreso: self._update_height(node) y, si balance es
-    #     True, return self._rebalance(node) (así se cuentan las rotaciones).
-    #  7. Método público: delete(self, key, balance=True) que haga
-    #     self.last_rotations = [], self._set_root(...), self._size -= 1,
-    #     lance KeyError si no existe y devuelva el Event retirado.
+    def _delete_min(self, node, balance):
+        """Quita el nodo con la clave mínima del subárbol `node` y lo devuelve
+        ya desenganchado, junto con la nueva raíz de ese subárbol.
+        Se usa en el caso de dos hijos para mover el sucesor sin copiarlo."""
+        if node.left_son is None:
+            return node.right_son, node
 
-    def elimination(self, node, value):
+        new_left, minimum_node = self._delete_min(node.left_son, balance)
+        self._set_left(node, new_left)
+        self._update_height(node)
+        if balance:
+            node = self._rebalance(node)
+        return node, minimum_node
+
+    def delete(self, key, balance=True):
+        """metodo publico de delete, devuelve el Event
+        retirado. Lanza KeyError si no existe ningún evento con esa clave
+        (la excepción la levanta `_delete` al llegar a un subárbol vacío).
+        """
+        self.last_rotations = []
+        removed = []
+        self._set_root(self._delete(self.root, key, balance, removed))
+        self._size -= 1
+        return removed[0]
+
+    def _delete(self, node, key, balance, removed):
+        """Elimina de este subárbol el nodo cuyo identificador es key[2] y
+        devuelve la nueva raíz de ese subárbol. Al encontrarlo, agrega su
+        Event a la lista `removed` (así `delete` no necesita volver a
+        buscarlo, y funciona igual aunque el evento haya sido corregido).
+
+        Se reconoce el nodo por su identificador (key[2]), no por igualdad de
+        clave completa: si el evento tuvo una corrección, node.event.key ya
+        devuelve la clave NUEVA aunque el nodo siga ubicado según la clave
+        VIEJA que llega aquí (Scenario llama delete(old_key) en ese caso).
+        """
         if node is None:
-            return None
+            raise KeyError(f"No existe un evento con identificador {key[2]} en el AVL")
 
-        #se mueve al subarbol izquierdo
-        if value<node.value:
-            node.left= self.elimination(node.left, value)
+        if node.event.event_id == key[2]:
+            removed.append(node.event)
 
-        #se mueve al subarbol derecho
-        if value>node.value:
-            node.right = (self.elimination(node.right, value))
-
-        #node found
-        if value == node.value:
-            #leaf case
-            if node.left==None and node.right==None:
+            # leaf case
+            if node.left_son is None and node.right_son is None:
                 return None
 
-            #one child case
-            #if the evaluated node son is none it means the other son will
-            #be in the eliminated node position
-            if node.left is None:
-                return node.right
-            if node.right == None:
-                return node.left
+            # one child case
+            if node.left_son is None:
+                return node.right_son
+            if node.right_son is None:
+                return node.left_son
 
-            #two child case
-            if node.left!= None and node.right != None:{}
+            # two child case
+            new_right, successor = self._delete_min(node.right_son, balance)
+            self._set_left(successor, node.left_son)
+            self._set_right(successor, new_right)
+            node = successor
 
+        elif key < node.event.key:
+            self._set_left(node, self._delete(node.left_son, key, balance, removed))
+        else:
+            self._set_right(node, self._delete(node.right_son, key, balance, removed))
+
+        self._update_height(node)
+        if balance:
+            return self._rebalance(node)
+        return node
     # ==================================================================
     # Búsqueda y profundidad
     # ==================================================================
