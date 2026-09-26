@@ -1,5 +1,6 @@
 from app.domain.event import Event, AttentionStatus
 from app.structures.avl_node import AVLNode
+from app.structures.avl_tree import AVLTopologySnapshot
 from datetime import datetime
 from typing import Optional
 from app.domain.report import Report
@@ -56,10 +57,36 @@ class LoadAction:
     def __init__(self, previous_state):
         self.previous_state = previous_state
 
-"""Guarda la raíz anterior del AVL antes de una recuperación/rebalanceo global, para poder restaurar el árbol completo al deshacer."""
 class GlobalRecoveryAction:
-    def __init__(self, previous_root: AVLNode):
-        self.previous_root = previous_root
+    """Guarda cómo estaba el AVL antes de una recuperación global, para
+    poder dejarlo exactamente igual al deshacer (sección 13).
+
+    - topology_snapshot: copia de la forma del árbol tomada con
+      avl_tree.snapshot_topology() ANTES de recuperar. Guardar solo la raíz
+      anterior no basta: las rotaciones cambian los enlaces de esos mismos
+      nodos, así que la raíz vieja ya no describe la forma vieja.
+    - rotation_delta: lo que sumó la recuperación a las métricas de
+      rotación (avl_tree.last_rotation_delta() DESPUÉS de recuperar), para
+      restarlo al deshacer con avl_tree.revert_rotation_metrics(delta).
+    - previous_mode: modo en que estaba el escenario antes (normalmente
+      Mode.STRESS), por si la recuperación termina volviendo a modo normal.
+      Sin anotación de tipo a propósito: importar Mode desde scenario.py
+      crearía un import circular cuando Scenario importe estas acciones.
+
+    Flujo esperado en Scenario:
+        snapshot = self.avl_tree.snapshot_topology()
+        self.avl_tree.recover_balance()
+        action = GlobalRecoveryAction(snapshot, self.avl_tree.last_rotation_delta(), self.mode)
+        self.undo_stack.push(action)
+    Al deshacer:
+        self.avl_tree.restore_topology(action.topology_snapshot)
+        self.avl_tree.revert_rotation_metrics(action.rotation_delta)
+        self.mode = action.previous_mode
+    """
+    def __init__(self, topology_snapshot: AVLTopologySnapshot, rotation_delta: dict[str, int], previous_mode=None):
+        self.topology_snapshot = topology_snapshot
+        self.rotation_delta = rotation_delta
+        self.previous_mode = previous_mode
 
 """Guarda el reporte procesado y la posición que ocupaba en la cola, junto con la acción interna que generó ese paso (creación o corrección) y la estación confirmada si aplicó, para poder revertir el procesamiento de ese reporte y devolverlo a su posición en la cola."""
 class QueueStepAction:
