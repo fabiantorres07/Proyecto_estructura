@@ -18,7 +18,7 @@ class ZoneService {
             return response.data.map(fromApiZone);
         } catch (error) {
             console.error("Error al obtener zonas:", error);
-            return [];
+            throw error;
         }
     }
 
@@ -28,7 +28,7 @@ class ZoneService {
             return fromApiZone(response.data);
         } catch (error) {
             console.error("Zona no encontrada:", error);
-            return null;
+            throw error;
         }
     }
 
@@ -41,7 +41,7 @@ class ZoneService {
             return fromApiZone(response.data);
         } catch (error) {
             console.error("Error al crear zona:", error);
-            return null;
+            throw error;
         }
     }
 
@@ -54,7 +54,7 @@ class ZoneService {
             return fromApiZone(response.data);
         } catch (error) {
             console.error("Error al actualizar zona:", error);
-            return null;
+            throw error;
         }
     }
 
@@ -64,7 +64,7 @@ class ZoneService {
             return true;
         } catch (error) {
             console.error("Error al eliminar zona:", error);
-            return false;
+            throw error;
         }
     }
 }

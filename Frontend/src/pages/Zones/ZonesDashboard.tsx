@@ -5,6 +5,7 @@ import { zoneService } from "../../services/zoneService";
 import GenericTable from "../../components/GenericTable";
 import Swal from "sweetalert2";
 import CartesianPlane from "../../components/map/Plane";
+import { getApiErrorMessage } from "../../utils/utils";
 
 const ZonesDashboard: React.FC = () => {
     const [zones, setZones] = useState<Zone[]>([]);
@@ -16,8 +17,16 @@ const ZonesDashboard: React.FC = () => {
     }, []);
 
     const fetchData = async () => {
-        const zones = await zoneService.getZones();
-        setZones(zones)
+        try {
+            const zones = await zoneService.getZones();
+            setZones(zones);
+        } catch (error) {
+            Swal.fire({
+                title: "Error",
+                text: getApiErrorMessage(error, "No se pudieron cargar las zonas"),
+                icon: "error",
+            });
+        }
     };
 
     const handleAction = async (action: string, item: Zone) => {
@@ -57,7 +66,7 @@ const ZonesDashboard: React.FC = () => {
             catch (error) {
                 Swal.fire({
                     title: "Error",
-                    text: `Ha habido un error eliminando la zona: ${error}`,
+                    text: getApiErrorMessage(error, "No se pudo eliminar la zona"),
                     icon: "error",
                     timer: 3000
                 })
@@ -98,7 +107,7 @@ const ZonesDashboard: React.FC = () => {
             catch (error) {
                 Swal.fire({
                     title: "Error",
-                    text: `Ha habido un error creando la zona: ${error}`,
+                    text: getApiErrorMessage(error, "No se pudo crear la zona"),
                     icon: "error",
                     timer: 3000
                 })
@@ -138,7 +147,7 @@ const ZonesDashboard: React.FC = () => {
             catch (error) {
                 Swal.fire({
                     title: "Error",
-                    text: `Ha habido un error creando la actualizando: ${error}`,
+                    text: getApiErrorMessage(error, "No se pudo actualizar la zona"),
                     icon: "error",
                     timer: 3000
                 })

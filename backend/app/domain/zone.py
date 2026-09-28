@@ -14,6 +14,12 @@ class Zone:
         
         if (x_min < 0 or x_min > 1000 or y_min < 0 or y_min > 1000 or x_max < 0 or x_max > 1000 or y_max<0 or y_max>1000):
             raise ValueError("The zone's numbers must be between 0 and 1000")
+        
+        if any(coord * 10 != int(coord * 10) for coord in [x_min, y_min, x_max, y_max]):
+            raise ValueError("The coordinates can't contain more than one decimal value")
+        
+        if x_min > x_max or y_min > y_max:
+            raise ValueError("The min values of x and y can't exceed their max counterparts")
 
     def contains(self, x, y):
         if x >= self.x_min and x <= self.x_max:
