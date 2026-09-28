@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Stage, Layer, Line, Text } from "react-konva";
+import { Stage, Layer, Line, Text, Circle, Group, Label, Tag } from "react-konva";
 import MapZone from "./MapZone";
-import Event from "./Event";
+import MapStation from "./MapStation";
+import { Station } from "../../models/Station";
+import { Event as MapEventData } from "../../models/event";
 import { Zone } from "../../models/Zone";
 
 const GRID_SIZE = 10;
@@ -15,10 +17,20 @@ const ZOOM_STEP = 1.2;
 interface CartesianPlaneProps {
   zones?: Zone[];
   selectedZone?: Zone | null;
+  stations?: Station[];
+  selectedStation?: Station | null;
+  events?: MapEventData[];
 }
 
-function CartesianPlane({ zones = [], selectedZone = null }: CartesianPlaneProps) {
+function CartesianPlane({
+  zones = [],
+  selectedZone = null,
+  stations = [],
+  selectedStation = null,
+  events = [],
+}: CartesianPlaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [hoveredMarker, setHoveredMarker] = useState<string | null>(null);
 
   const [size, setSize] = useState({
     width: 0,
@@ -49,6 +61,8 @@ function CartesianPlane({ zones = [], selectedZone = null }: CartesianPlaneProps
   const canvasHeight = GRID_SIZE * CELL_SIZE + MARGIN * 2;
   const originX = MARGIN;
   const originY = MARGIN + GRID_SIZE * CELL_SIZE;
+  const mapCoordinate = (coordinate: number) =>
+    MARGIN + (coordinate / (GRID_SIZE * GRID_STEP_KM)) * (GRID_SIZE * CELL_SIZE);
 
   const zoom = (factor: number) => {
     setScale((currentScale) =>
@@ -170,7 +184,69 @@ function CartesianPlane({ zones = [], selectedZone = null }: CartesianPlaneProps
               }
             />
           ))}
-          <Event />
+
+          {stations.map((station, index) => {
+            if (station.x == null || station.y == null) {
+              return null;
+            }
+
+            const x = mapCoordinate(station.x);
+            const y = originY - (station.y / (GRID_SIZE * GRID_STEP_KM)) * (GRID_SIZE * CELL_SIZE);
+
+            return (
+              <MapStation
+                key={`station-${station.station_id ?? index}`}
+                station={station}
+                x={x}
+                y={y}
+                selected={
+                  selectedStation === station ||
+                  (selectedStation?.station_id != null &&
+                    selectedStation.station_id === station.station_id)
+                }
+              />
+            );
+          })}
+
+          {events.map((mapEvent, index) => {
+            const markerKey = `event-${mapEvent.event_id}`;
+            const x = mapCoordinate(mapEvent.x);
+            const y = originY - (mapEvent.y / (GRID_SIZE * GRID_STEP_KM)) * (GRID_SIZE * CELL_SIZE);
+
+            return (
+              <Group
+                key={`${markerKey}-${index}`}
+                onMouseEnter={(event) => {
+                  setHoveredMarker(markerKey);
+                  event.target.getStage()!.container().style.cursor = "pointer";
+                }}
+                onMouseLeave={(event) => {
+                  setHoveredMarker(null);
+                  event.target.getStage()!.container().style.cursor = "default";
+                }}
+              >
+                <Circle
+                  x={x}
+                  y={y}
+                  radius={8}
+                  fill="#ef4444"
+                  stroke="#991b1b"
+                  strokeWidth={2}
+                />
+                {hoveredMarker === markerKey && (
+                  <Label x={x + 10} y={y - 28}>
+                    <Tag fill="black" cornerRadius={5} />
+                    <Text
+                      text={mapEvent.event_id}
+                      fill="white"
+                      padding={8}
+                      fontSize={14}
+                    />
+                  </Label>
+                )}
+              </Group>
+            );
+          })}
         </Layer>
       </Stage>
     </div>

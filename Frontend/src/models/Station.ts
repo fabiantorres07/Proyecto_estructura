@@ -1,5 +1,5 @@
 export interface Station{
-    station_id?: number;
+    station_id?: string;
     x?: number;
     y?: number;
 }

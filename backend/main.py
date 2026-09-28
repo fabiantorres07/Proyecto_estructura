@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.zones import router as zones_router
+from app.api.stations import router as stations_router
 
 app = FastAPI()
 
@@ -17,6 +18,7 @@ app.add_middleware(
 )
 
 app.include_router(zones_router)
+app.include_router(stations_router)
 
 @app.get("/")
 def read_root():

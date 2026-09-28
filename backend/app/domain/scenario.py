@@ -16,7 +16,7 @@ class Mode(Enum):
 
 class Scenario:
 
-    def __init__(self, metrics : Optional[dict[str, int]] = None, event_index : Optional[dict[int, AVLNode]] = None, stations : Optional[dict[int, Station]] = None, zones: Optional[list[Zone]] = None, eliminated_IDs: Optional[set[int]] = None, archived_history: Optional[dict[int, Event]] = None, simulation_clock: Optional[datetime] = None,  L: int=3, W: float = 48.0, R: float = 40.0, T: float = 72.0, mode: Mode = Mode.NORMAL, undo_stack: Optional[Stack] = None, report_queue: Optional[Queue] = None):
+    def __init__(self, metrics : Optional[dict[str, int]] = None, event_index : Optional[dict[int, AVLNode]] = None, stations : Optional[dict[str, Station]] = None, zones: Optional[list[Zone]] = None, eliminated_IDs: Optional[set[int]] = None, archived_history: Optional[dict[int, Event]] = None, simulation_clock: Optional[datetime] = None,  L: int=3, W: float = 48.0, R: float = 40.0, T: float = 72.0, mode: Mode = Mode.NORMAL, undo_stack: Optional[Stack] = None, report_queue: Optional[Queue] = None):
 
         #Colecciones de eliminación e histórico
         self.eliminated_IDs = eliminated_IDs if eliminated_IDs is not None else set()
@@ -99,26 +99,24 @@ class Scenario:
     """================STATION METHODS================"""
     """==============================================="""
 
-    def add_station(self, station: Station):
-        """This method is called to add a station to the scenario. It checks if there is another existing station with the same name, and if there isn't, then the new station is added"""
+    def add_station(self, station: Station) -> Station:
+        """Add a station, using its ID as the dictionary key."""
+        if station.station_id in self.stations:
+            raise ValueError("A station with this ID already exists")
 
-        if any(existing.name == station.name for existing in self.stations):
-            raise ValueError("A station with this name already exist")
-        
-        self.stations.append(station)
-        return zone
+        self.stations[station.station_id] = station
+        return station
 
     def get_station(self, station_id: str) -> Station:
         """This method returns the station with the id that is being searched"""
-        for station in self.stations:
-            if station.station_id == station_id:
-                return station
-
-        raise KeyError(f"Station '{station_id}' was not found")
+        try:
+            return self.stations[station_id]
+        except KeyError:
+            raise KeyError(f"Station '{station_id}' was not found") from None
 
     def list_stations(self) -> list[Station]:
         """This method returns the list of stations of the scenario"""
-        return self.stations
+        return list(self.stations.values())
 
     def update_station(self, station_id: str, changes: dict) -> Station:
         """This method is called to update the data of a zone that already exists"""
@@ -131,21 +129,22 @@ class Scenario:
         }
 
         if updated_values["station_id"] != station_id and any(
-            station.station_id == updated_values["station_id"] for station in self.stations
+            existing_id == updated_values["station_id"] for existing_id in self.stations
         ):
             raise ValueError("A station with this id already exists")
         
         #The old instance gets replaced with the new one in the same index that the old one used to be
 
-        updated_station = Station(updated_values)
-        station_index = self.stations.index(current_station)
-        self.stations[station_index] = updated_station
+        updated_station = Station(**updated_values)
+        if updated_station.station_id != station_id:
+            del self.stations[station_id]
+        self.stations[updated_station.station_id] = updated_station
         return updated_station
 
     def delete_station(self, station_id: str) -> None:
         """This method deletes a zone"""
-        station = self.get_station(station_id)
-        self.stations.remove(station)
+        self.get_station(station_id)
+        del self.stations[station_id]
 
 
 

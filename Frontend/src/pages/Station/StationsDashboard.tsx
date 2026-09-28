@@ -3,97 +3,163 @@ import { Station } from "../../models/Station";
 import GenericTable from "../../components/GenericTable";
 import Swal from "sweetalert2";
 import StationFormValidator from "../../components/stations/StationFormValidator";
-import { useNavigate } from "react-router-dom";
+import { getApiErrorMessage } from "../../utils/utils";
 import CartesianPlane from "../../components/map/Plane";
+import { stationService } from "../../services/stationService";
 
 const StationsDashboard: React.FC = () => {
-    const navigate = useNavigate();
     const [stations, setStations] = useState<Station[]>([]);
-    let selectedStation: Station | null = null;
-    let currentMode: number = 1;
+    const [selectedStation, setSelectedStation] = useState<Station | null>(null);
+    const [currentMode, setCurrentMode] = useState(1); //1 = create, 2 = edit
 
     useEffect(() => {
         fetchData();
     }, []);
 
     const fetchData = async () => {
+        try {
+            const stations = await stationService.getStations();
+            setStations(stations);
+        } catch (error) {
+            Swal.fire({
+                title: "Error",
+                text: getApiErrorMessage(error, "No se pudieron cargar las estaciones"),
+                icon: "error",
+            });
+        }
     };
 
-    const handleAction = (action: string, item: Station) => {
-        if (action === "edit") {
-            console.log("Edit post:", item);
+    const handleAction = async (action: string, item: Station) => {
+        if (action === "select") {
+            setCurrentMode(2);
+            setSelectedStation(item);
         } else if (action === "delete") {
-            console.log("Delete post:", item);
+            if (!item.station_id) {
+                return;
+            }
+            try{
+                const deletedStation = await stationService.deleteStation(item.station_id)
+                if (deletedStation){
+                    Swal.fire({
+                        toast: true,
+                        position: "top-end",
+                        icon: "success",
+                        title: "Zona eliminada",
+                        text: `Se ha eliminado la estación ${item.station_id}`,
+                        timer: 3000
+                    })
+
+                    await fetchData();
+                    setSelectedStation(null);
+                    setCurrentMode(1);
+
+                }
+                else {
+                    Swal.fire({
+                        title: "Error",
+                        text: "La estación no se ha podido eliminar",
+                        icon: "error",
+                        timer: 3000
+                    })
+                }
+            }
+            catch (error) {
+                Swal.fire({
+                    title: "Error",
+                    text: getApiErrorMessage(error, "No se pudo eliminar la estación"),
+                    icon: "error",
+                    timer: 3000
+                })
+            }
+
         }
     };
 
     const handleStationForm = async (station: Station) => {
 
         if (currentMode === 1){
+            try{
+                const createdStation = await stationService.createStation(station);
+                if (createdStation){
+                    Swal.fire({
+                        toast: true,
+                        position: "top-end",
+                        icon: "success",
+                        title: "Zona creada",
+                        text: `Se ha creado la estación ${station.station_id}`,
+                        timer: 3000
+                    })
 
-        }
+                    await fetchData();
+                    setSelectedStation(createdStation);
+                    setCurrentMode(2);
 
-        else {
-
-        }
-        try {
-            const createdUser = await userService.createUser(user);
-            if (createdUser) {
-                Swal.fire({
-                    title: "Completado",
-                    text: "Se ha creado correctamente el registro",
-                    icon: "success",
-                    timer: 3000
-                })
-                console.log("Usuario creado con éxito:", createdUser);
-                navigate("/Users/List");
-            } else {
+                }
+                else {
+                    Swal.fire({
+                        title: "Error",
+                        text: "La estación no se ha podido crear",
+                        icon: "error",
+                        timer: 3000
+                    })
+                }
+            }
+            catch (error) {
                 Swal.fire({
                     title: "Error",
-                    text: "Existe un problema al momento de crear el registro",
+                    text: getApiErrorMessage(error, "No se pudo crear la estación"),
                     icon: "error",
                     timer: 3000
                 })
             }
-        } catch (error) {
-            Swal.fire({
-                title: "Error",
-                text: "Existe un problema al momento de crear el registro",
-                icon: "error",
-                timer: 3000
-            })
+
+        }
+
+        else if (currentMode === 2){
+            if (!selectedStation?.station_id) {
+                return;
+            }
+            try{
+                const updatedStation = await stationService.updateStation(selectedStation.station_id,station)
+                if (updatedStation){
+                    Swal.fire({
+                        toast: true,
+                        position: "top-end",
+                        icon: "success",
+                        title: "Estación actualizada",
+                        text: `Se ha actualizado la estación ${station.station_id}`,
+                        timer: 3000
+                    })
+
+                    await fetchData();
+                    setSelectedStation(updatedStation);
+
+                }
+                else {
+                    Swal.fire({
+                        title: "Error",
+                        text: "La estación no se ha podido actualizar",
+                        icon: "error",
+                        timer: 3000
+                    })
+                }
+            }
+            catch (error) {
+                Swal.fire({
+                    title: "Error",
+                    text: getApiErrorMessage(error, "No se pudo actualizar la estación"),
+                    icon: "error",
+                    timer: 3000
+                })
+            }
+
         }
     };
 
-    const deletePost = async (id: number) => {
-        Swal.fire({
-            title: "¿Estás seguro que quiere eliminar?",
-            text: "¡No podrás revertir esto!",
-            icon: "warning",
-            showCancelButton: true,
-            confirmButtonColor: "#3085d6",
-            cancelButtonColor: "#d33",
-        }).then(async (result) => {
-            if (result.isConfirmed) {
-                const success = await postService.deletePost(id);
-                if (success) {
-                    Swal.fire(
-                        "¡Eliminado!",
-                        "El post ha sido eliminado.",
-                        "success"
-                    );
-                    fetchData();
-                } else {
-                    console.error("Error al eliminar el post con id:", id);
-                    Swal.fire({
-                        icon: "error",
-                        title: "Error",
-                        text: "No se pudo eliminar el post. Por favor, inténtalo de nuevo.",
-                    });
-                }
-            }
-        });
-    };
+    function handleDeselect(){
+        setCurrentMode(1);
+        setSelectedStation(null);
+    }
 
     return (
         <div className="w-full space-y-6">
@@ -107,12 +173,21 @@ const StationsDashboard: React.FC = () => {
                         mode={currentMode}
                         handleAction={handleStationForm}
                     />
+                    {selectedStation && (
+                        <button
+                            type="button"
+                            onClick={handleDeselect}
+                            className="mt-4 w-full rounded-md bg-meta-1 px-4 py-2 font-medium text-white hover:bg-opacity-90"
+                        >
+                            Deseleccionar
+                        </button>
+                    )}
                 </div>
 
                 <div className="min-w-0">
                     <GenericTable
                         data={stations}
-                        columns={["id", "x", "y"]}
+                        columns={["station_id", "x", "y"]}
                         actions={[
                             { name: "select", label: "Seleccionar" },
                             { name: "delete", label: "Borrar" },
@@ -124,7 +199,7 @@ const StationsDashboard: React.FC = () => {
             </div>
 
             <div className="w-full h-[50vh]">
-                <CartesianPlane />
+                <CartesianPlane stations={stations} selectedStation={selectedStation} />
             </div>
 
         </div>

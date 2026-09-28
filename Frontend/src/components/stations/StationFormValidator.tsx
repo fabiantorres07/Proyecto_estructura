@@ -11,12 +11,13 @@ interface MyFormProps {
 const StationFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, station }) => {
     return (
         <Formik
+            enableReinitialize
             initialValues={ //Either the existing station values are filled out, or the boxes come empty, if said station does not exist
                 station
                     ? {
                         station_id: station.station_id || "",
-                        x: station.x || "",
-                        y: station.y || "",
+                        x: station.x ?? "",
+                        y: station.y ?? "",
                     }
                     : {
                         station_id: "",
@@ -25,9 +26,19 @@ const StationFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, stati
                     }
             }
             validationSchema={Yup.object({
-                station_id: Yup.string().required("El ID de la estación es obligatoria"),
-                x: Yup.number().required("La coordenada en x de la estación es obligatoria"),
-                y: Yup.number().required("La coordenada en y de la estación obligatoria"),
+                station_id: Yup.string()
+                    .required("El ID de la estación es obligatorio")
+                    .matches(/^\S+$/, "El ID de la estación no puede contener espacios"),
+                x: Yup.number()
+                    .required("La coordenada en x de la estación es obligatoria")
+                    .min(0, "La coordenada debe estar entre 0 y 1000")
+                    .max(1000, "La coordenada debe estar entre 0 y 1000")
+                    .test("max-decimals", "Máximo un decimal", value => value == null || Number.isInteger(value * 10)),
+                y: Yup.number()
+                    .required("La coordenada en y de la estación es obligatoria")
+                    .min(0, "La coordenada debe estar entre 0 y 1000")
+                    .max(1000, "La coordenada debe estar entre 0 y 1000")
+                    .test("max-decimals", "Máximo un decimal", value => value == null || Number.isInteger(value * 10)),
                 
             })}
             onSubmit={(values) => {
@@ -74,6 +85,9 @@ const StationFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, stati
                         <Field
                             type="number"
                             name="x"
+                            min="0"
+                            max="1000"
+                            step="0.1"
                             className="w-full border border-gray-300 rounded-md p-2"
                         />
 
@@ -95,6 +109,9 @@ const StationFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, stati
                         <Field
                             type="number"
                             name="y"
+                            min="0"
+                            max="1000"
+                            step="0.1"
                             className="w-full border border-gray-300 rounded-md p-2"
                         />
 

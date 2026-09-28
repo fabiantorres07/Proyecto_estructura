@@ -1,7 +1,7 @@
 import { Group, Circle, Label, Tag, Text } from "react-konva";
 import { useState } from "react";
 
-function Evento() {
+function MapEvent() {
   const [hover, setHover] = useState(false);
 
   return (
@@ -40,4 +40,4 @@ function Evento() {
   );
 }
 
-export default Evento;
+export default MapEvent;
