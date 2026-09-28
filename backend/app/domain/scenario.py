@@ -40,6 +40,36 @@ class Scenario:
         self.undo_stack = undo_stack if undo_stack is not None else Stack()
         self.report_queue = report_queue if report_queue is not None else Queue()
 
+    @staticmethod
+    def _as_utc(value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Event and report timestamps must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    def update_simulation_clock(self, new_clock: datetime) -> datetime:
+        new_clock = self._as_utc(new_clock)
+
+        for node in self.event_index.values():
+            if self._as_utc(node.event.occurred_at) > new_clock:
+                raise ValueError(
+                    f"Cannot set the clock before event {node.event.event_id}"
+                )
+
+        for event in self.archived_history.values():
+            if self._as_utc(event.occurred_at) > new_clock:
+                raise ValueError(
+                    f"Cannot set the clock before event {event.event_id}"
+                )
+
+        for report in self.report_queue.items():
+            if self._as_utc(report.occurred_at) > new_clock:
+                raise ValueError(
+                    f"Cannot set the clock before report {report.event_id}"
+                )
+
+        self.simulation_clock = new_clock
+        return self.simulation_clock
+
     """==============================================="""
     """================ZONE METHODS==================="""
     """==============================================="""

@@ -64,7 +64,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
     >
       {/* <!-- SIDEBAR HEADER --> */}
       <div className="flex h-[76px] shrink-0 items-center justify-between gap-2 px-6">
-        <NavLink to="/">
+        <NavLink to="/sismos/mapa">
           <img src={Logo} alt="Logo" className="block h-8 w-50" />
         </NavLink>
 

@@ -1,26 +1,41 @@
-import { Link } from 'react-router-dom';
-import Logo from '../images/logo/logo-icon.svg';
-import DarkModeSwitcher from './DarkModeSwitcher';
-import DropdownMessage from './DropdownMessage';
-import DropdownNotification from './DropdownNotification';
-import DropdownUser from './DropdownUser';
+import { useEffect, useState } from 'react';
+import { Download, Upload, Undo2 } from 'lucide-react';
+
+const toLocalDateTime = (date: Date) =>
+  new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 19);
 
 const Header = (props: {
   sidebarOpen: string | boolean | undefined;
   setSidebarOpen: (arg0: boolean) => void;
 }) => {
+  const [dateTime, setDateTime] = useState(() => toLocalDateTime(new Date()));
+  const [hasCustomDateTime, setHasCustomDateTime] = useState(false);
+  const [stressMode, setStressMode] = useState(false);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (!hasCustomDateTime) {
+        setDateTime(toLocalDateTime(new Date()));
+      }
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [hasCustomDateTime]);
+
   return (
     <header className="sticky top-0 z-999 flex w-full bg-white drop-shadow-1 dark:bg-boxdark dark:drop-shadow-none">
-      <div className="flex flex-grow items-center justify-between py-4 px-4 shadow-2 md:px-6 2xl:px-11">
-        <div className="flex items-center gap-2 sm:gap-4 lg:hidden">
-          {/* <!-- Hamburger Toggle BTN --> */}
+      <div className="flex w-full flex-wrap items-center gap-4 px-4 py-3 shadow-2 md:px-6 2xl:px-11">
+        <div className="flex items-center lg:hidden">
           <button
             aria-controls="sidebar"
+            aria-label="Abrir o cerrar menú"
             onClick={(e) => {
               e.stopPropagation();
               props.setSidebarOpen(!props.sidebarOpen);
             }}
-            className="z-99999 block rounded-sm border border-stroke bg-white p-1.5 shadow-sm dark:border-strokedark dark:bg-boxdark lg:hidden"
+            className="z-99999 block rounded-sm border border-stroke bg-white p-1.5 shadow-sm dark:border-strokedark dark:bg-boxdark"
           >
             <span className="relative block h-5.5 w-5.5 cursor-pointer">
               <span className="du-block absolute right-0 h-full w-full">
@@ -54,67 +69,65 @@ const Header = (props: {
               </span>
             </span>
           </button>
-          {/* <!-- Hamburger Toggle BTN --> */}
-
-          <Link className="block flex-shrink-0 lg:hidden" to="/">
-            <img src={Logo} alt="Logo" className="block h-8 w-8" />
-          </Link>
         </div>
 
-        <div className="hidden sm:block">
-          <form action="https://formbold.com/s/unique_form_id" method="POST">
-            <div className="relative">
-              <button className="absolute top-1/2 left-0 -translate-y-1/2">
-                <svg
-                  className="fill-body hover:fill-primary dark:fill-bodydark dark:hover:fill-primary"
-                  width="20"
-                  height="20"
-                  viewBox="0 0 20 20"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  <path
-                    fillRule="evenodd"
-                    clipRule="evenodd"
-                    d="M9.16666 3.33332C5.945 3.33332 3.33332 5.945 3.33332 9.16666C3.33332 12.3883 5.945 15 9.16666 15C12.3883 15 15 12.3883 15 9.16666C15 5.945 12.3883 3.33332 9.16666 3.33332ZM1.66666 9.16666C1.66666 5.02452 5.02452 1.66666 9.16666 1.66666C13.3088 1.66666 16.6667 5.02452 16.6667 9.16666C16.6667 13.3088 13.3088 16.6667 9.16666 16.6667C5.02452 16.6667 1.66666 13.3088 1.66666 9.16666Z"
-                    fill=""
-                  />
-                  <path
-                    fillRule="evenodd"
-                    clipRule="evenodd"
-                    d="M13.2857 13.2857C13.6112 12.9603 14.1388 12.9603 14.4642 13.2857L18.0892 16.9107C18.4147 17.2362 18.4147 17.7638 18.0892 18.0892C17.7638 18.4147 17.2362 18.4147 16.9107 18.0892L13.2857 14.4642C12.9603 14.1388 12.9603 13.6112 13.2857 13.2857Z"
-                    fill=""
-                  />
-                </svg>
-              </button>
+        <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-3">
+          <label className="flex min-w-0 items-center gap-2 text-sm font-medium text-body dark:text-bodydark">
+            <span className="hidden md:inline">Fecha y hora</span>
+            <input
+              aria-label="Fecha y hora actual, editable hasta segundos"
+              type="datetime-local"
+              step="1"
+              value={dateTime}
+              onChange={(event) => {
+                setDateTime(event.target.value);
+                setHasCustomDateTime(true);
+              }}
+              className="min-w-0 rounded border border-stroke bg-white px-2 py-2 text-sm text-black focus:border-primary focus:outline-none dark:border-strokedark dark:bg-boxdark dark:text-white"
+            />
+          </label>
 
-              <input
-                type="text"
-                placeholder="Type to search..."
-                className="w-full bg-transparent pr-4 pl-9 focus:outline-none"
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 rounded border border-stroke px-3 py-2 text-sm font-medium text-body hover:bg-gray dark:border-strokedark dark:text-bodydark dark:hover:bg-meta-4"
+            >
+              <Upload size={16} aria-hidden="true" />
+              <span>Cargar versión</span>
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 rounded border border-stroke px-3 py-2 text-sm font-medium text-body hover:bg-gray dark:border-strokedark dark:text-bodydark dark:hover:bg-meta-4"
+            >
+              <Download size={16} aria-hidden="true" />
+              <span>Descargar versión</span>
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 rounded border border-stroke px-3 py-2 text-sm font-medium text-body hover:bg-gray dark:border-strokedark dark:text-bodydark dark:hover:bg-meta-4"
+            >
+              <Undo2 size={16} aria-hidden="true" />
+              <span>Deshacer</span>
+            </button>
+          </div>
+
+          <button
+            type="button"
+            role="switch"
+            aria-checked={stressMode}
+            onClick={() => setStressMode((enabled) => !enabled)}
+            className="inline-flex items-center gap-2 rounded px-2 py-2 text-sm font-medium text-body dark:text-bodydark"
+          >
+            <span>Modo estrés</span>
+            <span
+              className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors ${stressMode ? "bg-primary" : "bg-bodydark2"}`}
+            >
+              <span
+                className={`pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform duration-200 ${stressMode ? "translate-x-5" : "translate-x-0"}`}
               />
-            </div>
-          </form>
-        </div>
-
-        <div className="flex items-center gap-3 2xsm:gap-7">
-          <ul className="flex items-center gap-2 2xsm:gap-4">
-            {/* <!-- Dark Mode Toggler --> */}
-            <DarkModeSwitcher />
-            {/* <!-- Dark Mode Toggler --> */}
-
-            {/* <!-- Notification Menu Area --> */}
-            <DropdownNotification />
-            {/* <!-- Notification Menu Area --> */}
-
-            {/* <!-- Chat Notification Area --> */}
-            <DropdownMessage />
-            {/* <!-- Chat Notification Area --> */}
-          </ul>
-
-          {/* <!-- User Area --> */}
-          <DropdownUser />
-          {/* <!-- User Area --> */}
+            </span>
+            <span className="w-7 text-left text-xs">{stressMode ? "On" : "Off"}</span>
+          </button>
         </div>
       </div>
     </header>
