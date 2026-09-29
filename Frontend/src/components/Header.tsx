@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Download, Upload, Undo2 } from 'lucide-react';
+import Swal from 'sweetalert2';
+import { clockService } from '../services/clockService';
+import { getApiErrorMessage } from '../utils/utils';
 
 const toLocalDateTime = (date: Date) =>
   new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
@@ -10,19 +13,53 @@ const Header = (props: {
   sidebarOpen: string | boolean | undefined;
   setSidebarOpen: (arg0: boolean) => void;
 }) => {
-  const [dateTime, setDateTime] = useState(() => toLocalDateTime(new Date()));
-  const [hasCustomDateTime, setHasCustomDateTime] = useState(false);
+  const [dateTime, setDateTime] = useState('');
+  const [isClockLoading, setIsClockLoading] = useState(true);
+  const [isClockUpdating, setIsClockUpdating] = useState(false);
   const [stressMode, setStressMode] = useState(false);
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      if (!hasCustomDateTime) {
-        setDateTime(toLocalDateTime(new Date()));
+    const loadClock = async () => {
+      try {
+        const clock = await clockService.getClock();
+        setDateTime(toLocalDateTime(clock));
+      } catch (error) {
+        await Swal.fire({
+          title: 'Error',
+          text: getApiErrorMessage(error, 'No se pudo cargar el reloj'),
+          icon: 'error',
+        });
+      } finally {
+        setIsClockLoading(false);
       }
-    }, 1000);
+    };
 
-    return () => window.clearInterval(interval);
-  }, [hasCustomDateTime]);
+    void loadClock();
+  }, []);
+
+  const handleDateTimeChange = async (value: string) => {
+    setDateTime(value);
+    const updatedClock = new Date(value);
+
+    if (!value || Number.isNaN(updatedClock.getTime())) {
+      return;
+    }
+
+    setIsClockUpdating(true);
+    try {
+      await clockService.updateClock(updatedClock);
+      const confirmedClock = await clockService.getClock();
+      setDateTime(toLocalDateTime(confirmedClock));
+    } catch (error) {
+      await Swal.fire({
+        title: 'Error',
+        text: getApiErrorMessage(error, 'No se pudo actualizar el reloj'),
+        icon: 'error',
+      });
+    } finally {
+      setIsClockUpdating(false);
+    }
+  };
 
   return (
     <header className="sticky top-0 z-999 flex w-full bg-white drop-shadow-1 dark:bg-boxdark dark:drop-shadow-none">
@@ -79,10 +116,8 @@ const Header = (props: {
               type="datetime-local"
               step="1"
               value={dateTime}
-              onChange={(event) => {
-                setDateTime(event.target.value);
-                setHasCustomDateTime(true);
-              }}
+              disabled={isClockLoading || isClockUpdating}
+              onChange={(event) => void handleDateTimeChange(event.target.value)}
               className="min-w-0 rounded border border-stroke bg-white px-2 py-2 text-sm text-black focus:border-primary focus:outline-none dark:border-strokedark dark:bg-boxdark dark:text-white"
             />
           </label>
