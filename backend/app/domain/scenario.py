@@ -5,6 +5,7 @@ from time import monotonic
 from typing import Optional
 from app.domain.zone import Zone
 from app.domain.station import Station
+from app.domain.report import Report
 from app.structures.avl_node import AVLNode
 from app.structures.stack import Stack
 from app.structures.queue import Queue 
@@ -189,10 +190,68 @@ class Scenario:
         self.get_station(station_id)
         del self.stations[station_id]
 
+    """==============================================="""
+    """================REPORT METHODS================="""
+    """==============================================="""
 
+    # La cola solo guarda reportes PREPARADOS: encolar no toca eventos ni
+    # árboles. La decisión de cada reporte (tabla de la sección 6) se toma
+    # al procesarlo, en process_next_report(), que aún no existe porque
+    # depende de la creación/corrección de eventos.
+    #
+    # Decisiones del equipo (29-sep):
+    # - Los reportes con fecha posterior al reloj se rechazan AL ENCOLAR.
+    # - Un reporte encolado no se puede quitar individualmente; solo se
+    #   puede vaciar la cola completa.
 
+    def _validate_report(self, report: Report) -> None:
+        """Validaciones de un reporte que dependen del estado del escenario.
+        Los rangos y formatos ya los validó el schema (ReportCreate).
+        Lanza KeyError si la estación no está registrada y ValueError si la
+        fecha de ocurrencia es posterior al reloj de simulación."""
+        station_id = report.station.station_id
+        if self.stations.get(station_id) is not report.station:
+            raise KeyError(f"Station '{station_id}' was not found")
 
+        if self._as_utc(report.occurred_at) > self.simulation_clock:
+            raise ValueError(
+                f"Report for event {report.event_id} occurred after the "
+                f"simulation clock ({self.simulation_clock.replace(microsecond=0).isoformat()})"
+            )
 
+    def enqueue_report(self, report: Report) -> int:
+        """Agrega un reporte al final de la cola FIFO y devuelve su posición
+        (1 = el próximo en procesarse). Si no es válido, lanza la excepción
+        de _validate_report y la cola no cambia. O(1)."""
+        self._validate_report(report)
+        self.report_queue.enqueue(report)
+        return len(self.report_queue)
 
+    def enqueue_reports(self, reports: list[Report]) -> int:
+        """Encola una ráfaga de reportes en el orden recibido, de forma
+        atómica: primero valida TODOS y solo si todos son válidos los
+        encola. Así un error en el reporte 5 no deja encolados los 4
+        primeros. Devuelve la posición del primero de la ráfaga. O(N)."""
+        for report in reports:
+            self._validate_report(report)
 
+        first_position = len(self.report_queue) + 1
+        for report in reports:
+            self.report_queue.enqueue(report)
+        return first_position
 
+    def list_reports(self) -> list[Report]:
+        """Copia de la cola en orden de recepción (el primero es el próximo
+        que se procesará). Es una copia: modificar la lista no altera la
+        cola. O(n)."""
+        return self.report_queue.items()
+
+    def clear_report_queue(self) -> int:
+        """Descarta todos los reportes pendientes y devuelve cuántos había.
+        No toca eventos, árboles ni reloj.
+
+        PENDIENTE (decisión del equipo): por ahora NO se registra en la pila
+        de deshacer. El enunciado no lista "vaciar la cola" entre las
+        acciones de la sección 13, pero la cola sí forma parte del estado
+        recuperable."""
+        return self.report_queue.clear()

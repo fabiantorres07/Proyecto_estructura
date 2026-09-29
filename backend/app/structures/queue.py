@@ -19,3 +19,12 @@ class Queue:
 
     def items(self):
         return list(self._items)
+
+    def __len__(self):
+        return len(self._items)
+
+    def clear(self):
+        """Vacía la cola y devuelve cuántos elementos tenía. O(1)."""
+        removed = len(self._items)
+        self._items = []
+        return removed
