@@ -1,6 +1,7 @@
 from app.domain.event import Event
 from enum import Enum
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from time import monotonic
 from typing import Optional
 from app.domain.zone import Zone
 from app.domain.station import Station
@@ -23,7 +24,9 @@ class Scenario:
         self.archived_history = archived_history if archived_history is not None else dict()
 
         #Reloj de Simulación precisión en segundos, Si no se provee uno, toma la hora UTC actual del sistema
-        self.simulation_clock: datetime = simulation_clock or datetime.now(timezone.utc).replace(microsecond=0)
+        self._simulation_clock: datetime = simulation_clock or datetime.now(timezone.utc).replace(microsecond=0)
+        # Store a fixed baseline and measure elapsed time monotonically so wall-clock adjustments do not stop or reverse the simulation clock.
+        self._clock_anchor_monotonic = monotonic()
 
         #Parámetros globales configurables
         self.L= L #Limite inicialmente 3
@@ -39,6 +42,16 @@ class Scenario:
         self.metrics = metrics if metrics is not None else dict()
         self.undo_stack = undo_stack if undo_stack is not None else Stack()
         self.report_queue = report_queue if report_queue is not None else Queue()
+
+    @property
+    def simulation_clock(self) -> datetime:
+        elapsed_seconds = monotonic() - self._clock_anchor_monotonic
+        return self._simulation_clock + timedelta(seconds=elapsed_seconds)
+
+    @simulation_clock.setter
+    def simulation_clock(self, value: datetime) -> None:
+        self._simulation_clock = value
+        self._clock_anchor_monotonic = monotonic()
 
     @staticmethod
     def _as_utc(value: datetime) -> datetime:
