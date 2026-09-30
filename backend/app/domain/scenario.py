@@ -6,15 +6,11 @@ from typing import Optional
 from app.domain.zone import Zone
 from app.domain.station import Station
 from app.domain.report import Report
+from app.domain.mode import Mode
 from app.structures.avl_node import AVLNode
 from app.structures.stack import Stack
 from app.structures.queue import Queue 
 
-# El siguiente enum se usa para definir el modo del escenario
-#Como en teoria se inicializa en modo normal pues aja por eso esta aqui metido
-class Mode(Enum):
-    NORMAL = "Normal"
-    STRESS = "Stress"
 
 class Scenario:
 
@@ -44,6 +40,27 @@ class Scenario:
         self.undo_stack = undo_stack if undo_stack is not None else Stack()
         self.report_queue = report_queue if report_queue is not None else Queue()
 
+    @staticmethod
+    def _as_utc(value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Event and report timestamps must include a timezone")
+        return value.astimezone(timezone.utc)
+
+    """==============================================="""
+    """=================MODE METHODS=================="""
+    """==============================================="""
+
+    def set_mode(self, mode):
+        if not isinstance(mode, Mode):
+            raise ValueError("Mode must either be Stress or Normal")
+    
+    def get_mode(self):
+        return self.mode
+
+
+    """==============================================="""
+    """=================CLOCK METHODS================="""
+    """==============================================="""
     @property
     def simulation_clock(self) -> datetime:
         elapsed_seconds = monotonic() - self._clock_anchor_monotonic
@@ -53,12 +70,6 @@ class Scenario:
     def simulation_clock(self, value: datetime) -> None:
         self._simulation_clock = value
         self._clock_anchor_monotonic = monotonic()
-
-    @staticmethod
-    def _as_utc(value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError("Event and report timestamps must include a timezone")
-        return value.astimezone(timezone.utc)
 
     def update_simulation_clock(self, new_clock: datetime) -> datetime:
         new_clock = self._as_utc(new_clock)
