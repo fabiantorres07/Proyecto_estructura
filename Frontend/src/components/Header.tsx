@@ -3,6 +3,7 @@ import { Download, Upload, Undo2 } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { clockService } from '../services/clockService';
 import { getApiErrorMessage } from '../utils/utils';
+import { modeService } from '../services/modeService';
 
 const toLocalDateTime = (date: Date) =>
   new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
@@ -17,6 +18,8 @@ const Header = (props: {
   const [isClockLoading, setIsClockLoading] = useState(true);
   const [isClockUpdating, setIsClockUpdating] = useState(false);
   const [stressMode, setStressMode] = useState(false);
+  const [isModeLoading, setIsModeLoading] = useState(true);
+  const [isModeUpdating, setIsModeUpdating] = useState(false);
 
   useEffect(() => {
     const loadClock = async () => {
@@ -35,6 +38,24 @@ const Header = (props: {
     };
 
     void loadClock();
+  }, []);
+
+  useEffect(() => {
+    const loadMode = async () => {
+      try {
+        setStressMode(await modeService.getMode());
+      } catch (error) {
+        await Swal.fire({
+          title: 'Error',
+          text: getApiErrorMessage(error, 'No se pudo cargar el modo'),
+          icon: 'error',
+        });
+      } finally {
+        setIsModeLoading(false);
+      }
+    };
+
+    void loadMode();
   }, []);
 
   useEffect(() => {
@@ -77,6 +98,22 @@ const Header = (props: {
       setIsClockUpdating(false);
     }
   };
+
+  const handleStressModeChange = async(value: boolean) => {
+    setIsModeUpdating(true);
+    try {
+      await modeService.updateMode(value)
+      setStressMode(value);
+    } catch (error) {
+      await Swal.fire({
+        title: 'Error',
+        text: getApiErrorMessage(error, 'No se pudo actualizar el modo'),
+        icon: 'error',
+      })
+    } finally {
+      setIsModeUpdating(false);
+    }
+  }
 
   return (
     <header className="sticky top-0 z-999 flex w-full bg-white drop-shadow-1 dark:bg-boxdark dark:drop-shadow-none">
@@ -167,8 +204,9 @@ const Header = (props: {
             type="button"
             role="switch"
             aria-checked={stressMode}
-            onClick={() => setStressMode((enabled) => !enabled)}
-            className="inline-flex items-center gap-2 rounded px-2 py-2 text-sm font-medium text-body dark:text-bodydark"
+            disabled={isModeLoading || isModeUpdating}
+            onClick={() => void handleStressModeChange(!stressMode)}
+            className="inline-flex items-center gap-2 rounded px-2 py-2 text-sm font-medium text-body disabled:cursor-wait disabled:opacity-60 dark:text-bodydark"
           >
             <span>Modo estrés</span>
             <span

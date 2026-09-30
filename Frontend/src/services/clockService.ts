@@ -1,8 +1,5 @@
 import axios from "axios";
-
-interface ClockResponse {
-    simulation_clock: string;
-}
+import { ClockResponse } from "../models/clock";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/clock`;
 
