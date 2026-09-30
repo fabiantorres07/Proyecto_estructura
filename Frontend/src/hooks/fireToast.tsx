@@ -41,8 +41,8 @@ const createToast=(title: string, msg: string, type: number)=>{toast.custom((t) 
               stroke="currentColor"
               className="h-6 w-6">
               <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
+                strokeLinecap="round"
+                strokeLinejoin="round"
                 d="M6 18L18 6M6 6l12 12" />
             </svg>
           </span>

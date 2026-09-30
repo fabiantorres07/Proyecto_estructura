@@ -1,8 +1,8 @@
 from pydantic import BaseModel, field_validator
 from app.domain.mode import Mode
 
-class modeUpdate(BaseModel):
+class ModeUpdate(BaseModel):
     mode: Mode
 
-class modedeResponse(BaseModel):
+class ModeResponse(BaseModel):
     mode: Mode

@@ -53,6 +53,9 @@ class Scenario:
     def set_mode(self, mode):
         if not isinstance(mode, Mode):
             raise ValueError("Mode must either be Stress or Normal")
+
+        self.mode = mode
+        return self.mode
     
     def get_mode(self):
         return self.mode

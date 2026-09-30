@@ -4,6 +4,7 @@ from app.api.zones import router as zones_router
 from app.api.stations import router as stations_router
 from app.api.clock import router as clock_router
 from app.api.reports import router as reports_router
+from app.api.mode import router as mode_router
 
 app = FastAPI()
 
@@ -23,6 +24,7 @@ app.include_router(zones_router)
 app.include_router(stations_router)
 app.include_router(clock_router)
 app.include_router(reports_router)
+app.include_router(mode_router)
 
 @app.get("/")
 def read_root():
