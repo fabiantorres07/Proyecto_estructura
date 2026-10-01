@@ -3,6 +3,13 @@ from app.domain.station import Station
 
 class Event:
 
+    """CLASE EVENT"""
+    """Representa un terremoto: sus datos físicos y nada más.
+    Los datos: id, magnitud, profundidad, epicentro (x, y), fecha y hora.
+    La revisión vigente y las estaciones que han reportado.
+    Si está en zona poblada. Event no conoce las zonas, así que quien lo crea (Scenario) le dice el valor.
+    El estado de atención. Siempre empieza en pendiente."""
+
     def __init__(self,event_id, magnitude, depth, x, y, occurred_at,  revision, stations : set["Station"], is_in_populated_zone):
 
         self.event_id = event_id
@@ -24,6 +31,9 @@ class Event:
         self.attention_status = AttentionStatus.PENDING
 
         self.is_in_populated_zone = is_in_populated_zone
+
+        #SE NECESITA PARA CALCULAR EN SCENARIO LAS ASOCIACIONES (es un atributo de estado del sistema, solo se pone aqui)
+        self.reference_id = None
 
     @property
     def priority(self):
