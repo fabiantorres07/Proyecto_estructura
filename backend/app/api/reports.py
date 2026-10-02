@@ -19,13 +19,20 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 # encolado no se puede quitar individualmente, solo vaciar toda la cola.
 
 
-def _build_report(data: ReportCreate, scenario: Scenario) -> Report:
+def _build_report(
+    data: ReportCreate,
+    scenario: Scenario,
+    preceding_reports: list[Report] | None = None,
+) -> Report:
     """Convierte el schema en el objeto de dominio. La estación se busca en
     el escenario porque Report guarda el objeto Station, no solo su id.
     Lanza KeyError si la estación no existe."""
     return Report(
         event_id=data.event_id,
-        revision_num=data.revision_num,
+        revision_num=scenario.next_report_revision(
+        data.event_id,
+            preceding_reports,
+        ),
         station=scenario.get_station(data.station_id),
         magnitude=data.magnitude,
         depth=data.depth,
@@ -96,7 +103,9 @@ def enqueue_report_batch(
     """Prepara una ráfaga de reportes de N estaciones. Todo o nada: si uno
     falla, no se encola ninguno."""
     try:
-        reports = [_build_report(item, scenario) for item in data.reports]
+        reports = []
+        for item in data.reports:
+            reports.append(_build_report(item, scenario, reports))
         first_position = scenario.enqueue_reports(reports)
         return [
             _to_response(report, first_position + offset)

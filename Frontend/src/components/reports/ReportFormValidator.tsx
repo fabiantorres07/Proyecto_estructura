@@ -18,8 +18,8 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
             initialValues={ //Either the existing report values are filled out, or the boxes come empty, if said report does not exist
                 report
                     ? {
-                        event_id: report.event_id || "",
-                        station: report.station || "",
+                        event_id: report.event_id?.replace(/^SIS-/i, "") || "",
+                        station_id: report.station_id || "",
                         magnitude: report.magnitude || "",
                         depth: report.depth || "",
                         x: report.x || "",
@@ -37,17 +37,39 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
                     }
             }
             validationSchema={Yup.object({
-                event_id: Yup.string().required("El id del evento es obligatorio"),
+                event_id: Yup.string()
+                    .required("El número del evento es obligatorio")
+                    .matches(/^\d+$/, "El número del evento debe contener solo dígitos")
+                    .test(
+                        "event-id-range",
+                        "El número del evento debe estar entre 1 y 999999",
+                        (value) => !value || (Number(value) >= 1 && Number(value) <= 999999),
+                    ),
                 station: Yup.string().required("La estación de donde proviene el informe es obligatoria"),
-                magnitude: Yup.number().required("La magnitud del evento es obligatoria"),
-                depth: Yup.number().required("La profundidad del evento es obligatoria"),
-                x: Yup.number().required("La coordenada en x del evento es obligatoria"),
-                y: Yup.number().required("La coordenada en y del evento es obligatoria"),
+                magnitude: Yup.number().required("La magnitud del evento es obligatoria")
+                    .min(-2,"La magnitud del evento debe estar entre -2 y 10")
+                    .max(10,"La magnitud del evento debe estar entre -2 y 10")
+                    .test("max-decimals", "Máximo un decimal", value => value == null || Number.isInteger(value * 10)),
+                depth: Yup.number().required("La profundidad del evento es obligatoria")
+                    .min(0, "La profundidad debe estar entre 0 y 700")
+                    .max(700, "La profundida debe estar entre 0 y 700")
+                    .test("max-decimals", "Máximo un decimal", value => value == null || Number.isInteger(value * 10)),
+                x: Yup.number().required("La coordenada en x del evento es obligatoria")
+                    .min(0, "La coordenada debe estar entre 0 y 1000")
+                    .max(1000, "La coordenada debe estar entre 0 y 1000")
+                    .test("max-decimals", "Máximo un decimal", value => value == null || Number.isInteger(value * 10)),
+                y: Yup.number().required("La coordenada en y del evento es obligatoria")
+                    .min(0, "La coordenada debe estar entre 0 y 1000")
+                    .max(1000, "La coordenada debe estar entre 0 y 1000")
+                    .test("max-decimals", "Máximo un decimal", value => value == null || Number.isInteger(value * 10)),
                 ocurred_at: Yup.date(),
                 
             })}
             onSubmit={(values) => {
-                handleAction(values as ReportFormValues);
+                handleAction({
+                    ...values,
+                    event_id: `SIS-${values.event_id}`,
+                } as ReportFormValues);
             }}
         >
             {({ handleSubmit }) => (
@@ -63,11 +85,17 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
                         Id del evento
                     </label>
 
-                    <Field
-                        type="text"
-                        name="event_id"
-                        className="w-full border border-gray-300 rounded-md p-2"
-                    />
+                    <div className="flex">
+                        <span className="inline-flex items-center rounded-l-md border border-r-0 border-gray-300 bg-gray-2 px-3 text-gray-700">
+                            SIS-
+                        </span>
+                        <Field
+                            type="text"
+                            inputMode="numeric"
+                            name="event_id"
+                            className="w-full rounded-r-md border border-gray-300 p-2"
+                        />
+                    </div>
 
                     <ErrorMessage
                         name="event_id"

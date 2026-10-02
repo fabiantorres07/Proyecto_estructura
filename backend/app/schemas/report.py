@@ -25,7 +25,6 @@ class ReportCreate(BaseModel):
     del id puede cambiar (por ejemplo, al deshacer una eliminación)."""
 
     event_id: int = Field(ge=1, le=999999)
-    revision_num: int = Field(ge=1)
     station_id: str = Field(min_length=1)
     magnitude: float = Field(ge=-2.0, le=10.0, allow_inf_nan=False)
     depth: float = Field(ge=0.0, le=700.0, allow_inf_nan=False)

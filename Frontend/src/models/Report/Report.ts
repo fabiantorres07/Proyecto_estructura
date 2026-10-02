@@ -1,8 +1,7 @@
-import { Station } from "../Station";
 export interface Report{
     event_id: string;
     revision_num?: number | null;
-    station: Station;
+    station_id: string;
     magnitude: number;
     depth: number;
     x: number;
