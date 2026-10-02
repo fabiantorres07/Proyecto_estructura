@@ -3,6 +3,32 @@ import * as Yup from "yup";
 import { ReportFormValues } from "../../models/Report/ReportFormValues";
 import { Station } from "../../models/Station";
 import { useNavigate } from "react-router-dom";
+import { clockService } from "../../services/clockService";
+
+const formatLocalDateTime = (value: Date | string) => {
+    const date = value instanceof Date ? value : new Date(value);
+    return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+        .toISOString()
+        .slice(0, 19);
+};
+
+const parseLocalDateTime = (value?: string): Date | null => {
+    if (!value || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value)) {
+        return null;
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return null;
+    }
+
+    const formattedDate = formatLocalDateTime(date);
+    const matchesInput = value.length === 16
+        ? formattedDate.slice(0, 16) === value && date.getSeconds() === 0
+        : formattedDate === value;
+
+    return matchesInput ? date : null;
+};
 
 interface MyFormProps {
     mode: number; // 1 (create) or 2 (update)
@@ -13,22 +39,23 @@ interface MyFormProps {
 
 const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report, stations }) => {
     const navigate = useNavigate();
+
     return (
         <Formik
             initialValues={ //Either the existing report values are filled out, or the boxes come empty, if said report does not exist
                 report
                     ? {
-                        event_id: report.event_id?.replace(/^SIS-/i, "") || "",
+                        event_id: report.event_id || "",
                         station_id: report.station_id || "",
                         magnitude: report.magnitude || "",
                         depth: report.depth || "",
                         x: report.x || "",
                         y: report.y || "",
-                        ocurred_at: report.ocurred_at || "",
+                        ocurred_at: report.ocurred_at ? formatLocalDateTime(report.ocurred_at) : "",
                     }
                     : {
                         event_id: "",
-                        station: "",
+                        station_id: "",
                         magnitude: "",
                         depth: "",
                         x: "",
@@ -37,15 +64,12 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
                     }
             }
             validationSchema={Yup.object({
-                event_id: Yup.string()
+                event_id: Yup.number()
                     .required("El número del evento es obligatorio")
-                    .matches(/^\d+$/, "El número del evento debe contener solo dígitos")
-                    .test(
-                        "event-id-range",
-                        "El número del evento debe estar entre 1 y 999999",
-                        (value) => !value || (Number(value) >= 1 && Number(value) <= 999999),
-                    ),
-                station: Yup.string().required("La estación de donde proviene el informe es obligatoria"),
+                    .integer("El número del id debe ser un entero")
+                    .min(1, "El id del evento debe estar entre 1 y 999999")
+                    .max(999999, "El id del evento debe estar entre 1 y 999999"),
+                station_id: Yup.string().required("La estación de donde proviene el informe es obligatoria"),
                 magnitude: Yup.number().required("La magnitud del evento es obligatoria")
                     .min(-2,"La magnitud del evento debe estar entre -2 y 10")
                     .max(10,"La magnitud del evento debe estar entre -2 y 10")
@@ -62,13 +86,45 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
                     .min(0, "La coordenada debe estar entre 0 y 1000")
                     .max(1000, "La coordenada debe estar entre 0 y 1000")
                     .test("max-decimals", "Máximo un decimal", value => value == null || Number.isInteger(value * 10)),
-                ocurred_at: Yup.date(),
-                
+                ocurred_at: Yup.string()
+                    .test(
+                        "valid-local-date-time",
+                        "La fecha debe ser válida y tener precisión de segundos",
+                        (value) => !value || parseLocalDateTime(value) !== null,
+                    ),
             })}
-            onSubmit={(values) => {
+            onSubmit={async (values, { setFieldError }) => {
+                const dateValue = String(values.ocurred_at ?? "").trim();
+                let occurredAt: Date | undefined;
+
+                if (dateValue) {
+                    const parsedDate = parseLocalDateTime(dateValue);
+                    if (!parsedDate) {
+                        setFieldError("ocurred_at", "La fecha debe ser válida y tener precisión de segundos");
+                        return;
+                    }
+
+                    try {
+                        const latestSimulationClock = await clockService.getClock();
+                        if (parsedDate > latestSimulationClock) {
+                            setFieldError(
+                                "ocurred_at",
+                                "La fecha del sismo no puede ser posterior al reloj de simulación",
+                            );
+                            return;
+                        }
+                    } catch {
+                        setFieldError("ocurred_at", "No se pudo validar la fecha con el reloj de simulación");
+                        return;
+                    }
+
+                    occurredAt = parsedDate;
+                }
+
+                const { ocurred_at: _dateValue, ...reportValues } = values;
                 handleAction({
-                    ...values,
-                    event_id: `SIS-${values.event_id}`,
+                    ...reportValues,
+                    ...(occurredAt ? { ocurred_at: occurredAt } : {}),
                 } as ReportFormValues);
             }}
         >
@@ -90,7 +146,7 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
                             SIS-
                         </span>
                         <Field
-                            type="text"
+                            type="number"
                             inputMode="numeric"
                             name="event_id"
                             className="w-full rounded-r-md border border-gray-300 p-2"
@@ -106,7 +162,7 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
 
                 <div>
                     <label
-                        htmlFor="station"
+                        htmlFor="station_id"
                         className="block text-lg font-medium text-gray-700"
                     >
                         Estación
@@ -114,7 +170,7 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
 
                     <Field
                         as="select"
-                        name="station"
+                        name="station_id"
                         className="w-full border border-gray-300 rounded-md p-2 bg-white"
                     >
                         <option value="">Seleccione una estación</option>
@@ -130,7 +186,7 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
                     </Field>
 
                     <ErrorMessage
-                        name="station"
+                        name="station_id"
                         component="p"
                         className="text-danger text-sm"
                     />

@@ -41,7 +41,7 @@ const CreateReport = () => {
                 depth: report.depth,
                 x: report.x,
                 y: report.y,
-                ocurred_at: report.ocurred_at,
+                ...(report.ocurred_at ? { ocurred_at: report.ocurred_at } : {}),
             }
             const createdReport = await reportService.createReport(newReport);
             if (createdReport) {
@@ -52,7 +52,7 @@ const CreateReport = () => {
                     timer: 3000
                 })
                 console.log("Reporte creado con éxito:", createdReport);
-                navigate("/reportes/lista");
+                navigate("/reportes/cola");
             } else {
                 Swal.fire({
                     title: "Error",
@@ -64,7 +64,7 @@ const CreateReport = () => {
         } catch (error) {
             Swal.fire({
                 title: "Error",
-                text: "Existe un problema al momento de crear el reporte",
+                text: getApiErrorMessage(error, "Existe un problema al momento de crear el reporte"),
                 icon: "error",
                 timer: 3000
             })

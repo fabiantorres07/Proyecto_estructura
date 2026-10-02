@@ -10,15 +10,7 @@ const ReportQueue: React.FC = () => {
     const navigate = useNavigate();
     const [queue, setQueue] = useState<ReportFormValues[]>([
     ]);
-
-    const handleAction = (action: string, item: Report) => {
-        if (action === "edit") {
-            console.log("Edit report:", item);
-        } else if (action === "delete") {
-            console.log("Delete report:", item);
-        }
-    };
-    
+        
     useEffect(() => {
         fetchData();
     }, []);
@@ -47,12 +39,8 @@ const ReportQueue: React.FC = () => {
             </button>
             <GenericTable
                 data={queue}
-                columns={["position", "event_id", "revision_num", "station"]}
-                actions={[
-                    { name: "edit", label: "Editar" },
-                    { name: "delete", label: "Borrar" },
-                ]}
-                onAction={handleAction}
+                columnLabels={{ position: "posición", event_id: "id evento", revision_num: "número de revisión", station_id: "estación" }}
+                columns={["position", "event_id", "revision_num", "station_id"]}
             />
         </div>
     );

@@ -30,7 +30,9 @@ class ReportCreate(BaseModel):
     depth: float = Field(ge=0.0, le=700.0, allow_inf_nan=False)
     x: float = Field(ge=0.0, le=1000.0, allow_inf_nan=False)
     y: float = Field(ge=0.0, le=1000.0, allow_inf_nan=False)
-    occurred_at: datetime
+    occurred_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc).replace(microsecond=0)
+    )
 
     @field_validator("magnitude", "depth", "x", "y")
     @classmethod
