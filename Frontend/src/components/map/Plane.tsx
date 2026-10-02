@@ -101,17 +101,18 @@ function CartesianPlane({
         </button>
       </div>
 
-      <Stage
-        width={width}
-        height={height}
-        x={position.x}
-        y={position.y}
-        scaleX={scale}
-        scaleY={scale}
-        draggable
-        onDragEnd={(event) => setPosition(event.target.position())}
-        onWheel={handleWheel}
-      >
+      {width > 0 && height > 0 && (
+        <Stage
+          width={width}
+          height={height}
+          x={position.x}
+          y={position.y}
+          scaleX={scale}
+          scaleY={scale}
+          draggable
+          onDragEnd={(event) => setPosition(event.target.position())}
+          onWheel={handleWheel}
+        >
         <Layer>
           {Array.from({ length: GRID_SIZE + 1 }, (_, i) => {
             const x = originX + i * CELL_SIZE;
@@ -248,7 +249,8 @@ function CartesianPlane({
             );
           })}
         </Layer>
-      </Stage>
+        </Stage>
+      )}
     </div>
   );
 }
