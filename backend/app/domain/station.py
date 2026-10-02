@@ -1,3 +1,7 @@
+"""Es la ficha de una estación que reporta sismos: su número (id) y su ubicación (x, y). No hace nada más que guardar eso.
+
+Lo único especial son __eq__ y __hash__. Con ellos, dos estaciones con el mismo id cuentan como la misma."""
+
 class Station:
 
     def __init__(self, station_id, x, y):

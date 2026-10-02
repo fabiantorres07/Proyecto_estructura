@@ -292,7 +292,7 @@ class AVLTree:
         sobre node.right_son para obtener el sucesor inorden."""
         while node.left_son is not None:
             node = node.left_son
-        return node
+        return node  
 
     def _delete_min(self, node, balance):
         """Quita el nodo con la clave mínima del subárbol `node` y lo devuelve

@@ -1,4 +1,13 @@
 class Queue:
+
+    """Es una fila. El primero que llega es el primero que sale. Aquí esperan los reportes hasta que Scenario los procesa.
+
+    enqueue: mete un reporte al final.
+    dequeue: saca el primero.
+    peek: mira el primero sin sacarlo.
+    is_empty: dice si está vacía.
+    insert_at: mete un reporte en una posición exacta. Se usa al deshacer, para devolverlo a su lugar original.
+    items: da una copia de la fila para mostrar el orden, sin dejar que nadie desordene la original."""
     def __init__(self):
         self._items = []
 

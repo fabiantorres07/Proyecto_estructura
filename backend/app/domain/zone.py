@@ -1,5 +1,10 @@
 class Zone:
+    """Es un rectángulo del mapa. Guarda su nombre, sus límites (x mínima y máxima, y mínima y máxima) y si es poblada o no.
 
+    contains(x, y): responde si un punto está dentro de la zona. Los bordes cuentan como dentro, como pide el enunciado.
+    Al crearse revisa que el nombre no esté vacío y que los números estén entre 0 y 1000.
+    
+    Decidir a qué zona pertenece un evento, y qué pasa en el borde compartido entre dos zonas, lo hace Scenario, no Zone."""
     def __init__(self,name,  x_min, x_max, y_min, y_max, is_populated):
 
         self.name = name
