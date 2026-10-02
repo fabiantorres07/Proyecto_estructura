@@ -4,31 +4,8 @@ import { ReportFormValues } from "../../models/Report/ReportFormValues";
 import { Station } from "../../models/Station";
 import { useNavigate } from "react-router-dom";
 import { clockService } from "../../services/clockService";
-
-const formatLocalDateTime = (value: Date | string) => {
-    const date = value instanceof Date ? value : new Date(value);
-    return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
-        .toISOString()
-        .slice(0, 19);
-};
-
-const parseLocalDateTime = (value?: string): Date | null => {
-    if (!value || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value)) {
-        return null;
-    }
-
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-        return null;
-    }
-
-    const formattedDate = formatLocalDateTime(date);
-    const matchesInput = value.length === 16
-        ? formattedDate.slice(0, 16) === value && date.getSeconds() === 0
-        : formattedDate === value;
-
-    return matchesInput ? date : null;
-};
+import { formatLocalDateTime } from "../../utils/utils";
+import { parseLocalDateTime } from "../../utils/utils";
 
 interface MyFormProps {
     mode: number; // 1 (create) or 2 (update)
