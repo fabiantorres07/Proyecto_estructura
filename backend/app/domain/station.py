@@ -9,7 +9,7 @@ class Station:
         self.x = x
         self.y = y
 
-        if not id:
+        if station_id is None:
             raise ValueError("The station must contain an id to identify it")
 
         if x<0 or x>1000 or y<0 or y>1000:

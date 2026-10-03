@@ -57,36 +57,33 @@ class Event:
     def key(self):
         return (self.priority, self.magnitude, self.event_id)
 
-    def apply_correction(self, magnitude = None, depth = None, x = None, y = None, is_in_populated_zone = None):
+    def apply_correction(self, magnitude=None, depth=None, x=None, y=None,
+                        occurred_at=None, revision=None, is_in_populated_zone=None):
+        """Aplica una corrección sobre el evento.
+
+        - Cambia los campos que llegan (los que quedan en None no se tocan).
+        - `occurred_at` NO está en la clave K = (P, M, I), pero SÍ afecta
+        las asociaciones (sección 7): W horas, orden temporal de las
+        referencias. Un cambio de fecha puede mover qué eventos son
+        candidatos entre sí sin cambiar la clave.
+        - `revision`: si llega, se usa ese valor (corrección desde un
+        reporte, sección 6: "sustituir los datos vigentes" con la
+        revisión del reporte). Si no llega, se incrementa en 1
+        (corrección manual, sección 6: "r + 1").
+        - Devuelve (old_key, new_key) para que Scenario sepa si hay que
+        reubicar en los árboles.
+        """
         if x is not None or y is not None:
-            if is_in_populated_zone is not None:
-                new_populated_zone = is_in_populated_zone
-            else:
+            if is_in_populated_zone is None:
                 raise Exception("Cambio de epicentro requiere recalcular zona poblada")
-        if magnitude is not None:
-            new_magnitude = magnitude
-        else:
-            new_magnitude = self.magnitude
 
-        if depth is not None:
-            new_depth = depth
-        else:
-            new_depth = self.depth
-
-        if x is not None:
-            new_x = x
-        else:
-            new_x = self.x
-
-        if y is not None:
-            new_y = y
-        else:
-            new_y = self.y
-
-        if is_in_populated_zone is None:
-            new_populated_zone = self.is_in_populated_zone
-        else:
-            new_populated_zone = is_in_populated_zone
+        new_magnitude = magnitude if magnitude is not None else self.magnitude
+        new_depth = depth if depth is not None else self.depth
+        new_x = x if x is not None else self.x
+        new_y = y if y is not None else self.y
+        new_occurred_at = occurred_at if occurred_at is not None else self.occurred_at
+        new_populated_zone = (is_in_populated_zone if is_in_populated_zone is not None
+                            else self.is_in_populated_zone)
 
         old_key = self.key
 
@@ -94,8 +91,14 @@ class Event:
         self.depth = new_depth
         self.x = new_x
         self.y = new_y
+        self.occurred_at = new_occurred_at
         self.is_in_populated_zone = new_populated_zone
-        self.revision += 1
+
+        if revision is not None:
+            self.revision = revision
+        else:
+            self.revision += 1
+
         self.attention_status = AttentionStatus.PENDING
         new_key = self.key
 

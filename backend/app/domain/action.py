@@ -151,6 +151,7 @@ class CorrectionAction:
         old_depth: float,
         old_x: float,
         old_y: float,
+        old_occurred_at: datetime,
         old_is_in_populated_zone: bool,
         old_revision: int,
         old_attention_status,
@@ -161,6 +162,7 @@ class CorrectionAction:
         self.old_depth = old_depth
         self.old_x = old_x
         self.old_y = old_y
+        self.old_occurred_at = old_occurred_at
         self.old_is_in_populated_zone = old_is_in_populated_zone
         self.old_revision = old_revision
         self.old_attention_status = old_attention_status
@@ -179,11 +181,30 @@ class MassArchiveAction:
         self.was_left_child = was_left_child
         self.event_ids = event_ids
 
-"""Guarda el nombre del parámetro global (L, W, R o T) y su valor anterior, para poder revertir el cambio."""
 class ParameterChangeAction:
-    def __init__(self, parameter_name: str, old_value: float):
+    """Guarda el nombre del parámetro global (L, W, R o T), su valor
+    anterior, y — cuando el parámetro afecta las asociaciones (W o R) —
+    la foto de las referencias de todos los eventos activos y archivados
+    antes de recalcularlas.
+
+    ¿Por qué old_references?
+    Cambiar W o R redefine qué eventos son candidatos entre sí. No hay
+    filtro posible: cualquier evento puede ganar o perder candidatos.
+    Por eso, al cambiar W o R, Scenario recalcula la referencia de TODOS
+    los eventos activos y archivados. Para poder deshacer, hay que
+    guardar el reference_id que tenía cada uno antes del recálculo.
+
+    Para L y T no aplica: L solo afecta la marca de "acceso costoso"
+    (no toca referencias) y T solo afecta a futuras operaciones de
+    archivo (las ramas ya archivadas se quedan como están). En esos
+    casos old_references queda en None.
+    """
+
+    def __init__(self, parameter_name: str, old_value: float,
+                 old_references: dict[int, int | None] = None):
         self.parameter_name = parameter_name
         self.old_value = old_value
+        self.old_references = old_references
 
 class ClockAdvanceAction:
     """Guarda el valor anterior del reloj de simulación antes de avanzarlo, para poder retrocederlo al deshacer."""

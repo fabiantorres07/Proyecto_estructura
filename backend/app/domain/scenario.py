@@ -10,8 +10,7 @@ from app.domain.mode import Mode
 from app.structures.avl_node import AVLNode
 from app.structures.stack import Stack
 from app.structures.queue import Queue 
-from app.domain.action import CreationAction
-
+from app.domain.action import CreationAction, CorrectionAction, AttentionChangeAction, DeletionAction,ParameterChangeAction, ClockAdvanceAction, QueueStepAction
 from app.structures.avl_tree import AVLTree
 from app.structures.avl_node import AVLNode
 from app.structures.bst_node import BSTNode
@@ -93,25 +92,44 @@ class Scenario:
     def update_simulation_clock(self, new_clock: datetime) -> datetime:
         new_clock = self._as_utc(new_clock)
 
+        # No se puede retroceder el reloj.
+        if new_clock < self.simulation_clock:
+            raise ValueError("Cannot move the simulation clock backwards")
+
+        if new_clock == self.simulation_clock: #para no apilar una acción que no cambió nada
+            return self.simulation_clock
+        
+        # Validaciones existentes: ningún evento, archivado ni reporte
+        # puede quedar con fecha posterior al nuevo reloj.
         for node in self.event_index.values():
             if self._as_utc(node.event.occurred_at) > new_clock:
                 raise ValueError(
                     f"Cannot set the clock before event {node.event.event_id}"
                 )
-
+            
         for event in self.archived_history.values():
             if self._as_utc(event.occurred_at) > new_clock:
                 raise ValueError(
                     f"Cannot set the clock before event {event.event_id}"
                 )
-
+            
         for report in self.report_queue.items():
             if self._as_utc(report.occurred_at) > new_clock:
                 raise ValueError(
                     f"Cannot set the clock before report {report.event_id}"
                 )
 
+        # Guardar el reloj simulado actual (con el tiempo real transcurrido
+        # incluido) antes de cambiarlo, para poder volver exactamente a este
+        # instante al deshacer.
+        old_clock = self.simulation_clock
+
+        # Aplicar el nuevo reloj.
         self.simulation_clock = new_clock
+
+        # Apilar la acción con el valor viejo.
+        self.undo_stack.push(ClockAdvanceAction(old_clock))
+
         return self.simulation_clock
 
     """==============================================="""
@@ -191,12 +209,93 @@ class Scenario:
     def list_stations(self) -> list[Station]:
         """This method returns the list of stations of the scenario"""
         return list(self.stations.values())
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
     """EVENT STF"""
 
     def create_event(self, event_id: int, magnitude: float, depth: float, x: float, y: float,
-                    occurred_at, stations: set) -> Event:
+                    occurred_at, stations: set, revision: int = 1) -> Event:
         """Operación que dispara la interfaz cuando el usuario hace clic en
-        'crear evento'. Construye el evento desde cero con revision=1.
+        'crear evento'. Construye el evento desde cero.
+
+        El parámetro `revision` tiene default 1, que es el caso del alta
+        manual (sección 6: "asignar la revisión 1"). Se usa otro valor
+        cuando el evento se crea a partir de un reporte procesado, porque
+        la sección 6 dice: "la primera revisión recibida puede ser mayor
+        que 1".
+
         Un evento A es candidato a referencia de B cuando tiene mayor magnitud, ocurrió estrictamente antes...
         A = el evento que va a ser referencia (el candidato).
         B = el evento que está siendo referenciado (el que "necesita" una referencia)."""
@@ -209,7 +308,7 @@ class Scenario:
         # Aquí nace el evento nuevo (lo llamamos B).
         event = Event(
             event_id=event_id, magnitude=magnitude, depth=depth,
-            x=x, y=y, occurred_at=occurred_at, revision=1,
+            x=x, y=y, occurred_at=occurred_at, revision=revision,
             stations=stations, is_in_populated_zone=is_populated,
         )
 
@@ -496,10 +595,466 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
             "candidates": candidates_data,
         }
         
+    def correct_event(self, event_id: int, changes: dict) -> Event:
+        """Corrección manual de un evento activo (PUT /events/{id}).
+
+        `changes` es un dict con los campos que se quieren tocar: magnitude,
+        depth, x, y, occurred_at. Lo que no venga en el dict se queda igual.
+        event_id no se puede corregir (es inmutable). occurred_at sí, aunque
+        no esté en K, porque afecta las asociaciones.
+
+        Pasos (mismo orden que create_event, pero sobre un evento existente):
+        1. Validar que esté activo.
+        2. Guardar foto de los valores viejos.
+        3. Si cambia el epicentro, recalcular zona poblada.
+        4. Aplicar la corrección sobre el mismo objeto Event.
+        5-6. Reubicar en AVL/BST si cambió la clave.
+        7-10. Recalcular asociaciones (propia + afectados).
+        11. Apilar CorrectionAction para poder deshacer.
+        12. Devolver el evento.
+        """
+
+        # 1. Validación: solo se puede corregir un evento ACTIVO.
+        if event_id in self.archived_history:
+            raise ValueError(f"El evento {event_id} está archivado, no se puede corregir")
+        if event_id in self.eliminated_IDs:
+            raise ValueError(f"El evento {event_id} está eliminado, no se puede corregir")
+        if event_id not in self.event_index:
+            raise KeyError(f"No existe un evento con id {event_id}")
+
+        node = self.event_index[event_id]
+        event = node.event
+
+        # 2. Foto de los valores viejos, leídos del evento ANTES de tocarlo.
+        old_magnitude = event.magnitude
+        old_depth = event.depth
+        old_x = event.x
+        old_y = event.y
+        old_occurred_at = event.occurred_at
+        old_is_in_populated_zone = event.is_in_populated_zone
+        old_revision = event.revision
+        old_attention_status = event.attention_status
+
+        # 3. Si cambia x o y, hay que recalcular zona con el epicentro COMPLETO:
+        # si solo mandaron uno de los dos, el otro se completa con el valor
+        # actual del evento (mismo patrón que update_zone con sus "changes").
+        is_in_populated_zone = None
+        if "x" in changes or "y" in changes:
+            new_x = changes.get("x", event.x)
+            new_y = changes.get("y", event.y)
+            is_in_populated_zone = self.epicenter_in_populated_zone(new_x, new_y)
+
+        # 4. Aplicar la corrección. Muta el mismo objeto event y devuelve
+        # la clave de antes y la de después.
+        old_key, new_key = event.apply_correction(
+            magnitude=changes.get("magnitude"),
+            depth=changes.get("depth"),
+            x=changes.get("x"),
+            y=changes.get("y"),
+            occurred_at=changes.get("occurred_at"),
+            is_in_populated_zone=is_in_populated_zone,
+        )
+
+        # 5-6. Si la clave cambió (subió/bajó de prioridad, o cambió M),
+        # hay que sacarlo de los árboles con la clave vieja y reinsertarlo
+        # con la nueva. event_index se actualiza con el nodo NUEVO.
+        balance = (self.mode == Mode.NORMAL)
+
+        if old_key != new_key:
+            self.avl_tree.delete(old_key, balance=balance)
+            self.bst_tree.delete(old_key)
+            new_node = self.avl_tree.insert(event, balance=balance)
+            self.bst_tree.insert(event)
+            self.event_index[event_id] = new_node
+
+        # 7. Grupo 1: otros eventos que podrían haber ganado o perdido a este
+        # evento como candidato nuevo. Se usa el RANGO entre el valor viejo y
+        # el nuevo, porque:
+        #   - Si la fecha se movió a MÁS NUEVA, algunos eventos dejan de tenerlo
+        #     como candidato (estaban entre la fecha nueva y la vieja).
+        #   - Si la fecha se movió a MÁS ANTIGUA, algunos eventos lo ganan.
+        #   - Lo mismo con la magnitud: si bajó, algunos dejan de tenerlo; si
+        #     subió, algunos lo ganan.
+        # Usar min/max cubre los dos sentidos. Se recalcula de más, pero no
+        # se deja ninguna referencia desactualizada.
+        min_occurred = min(old_occurred_at, event.occurred_at)
+        max_magnitude = max(old_magnitude, event.magnitude)
+
+        affected_group_1 = [
+            other for other in self._all_active_and_archived_events()
+            if other.event_id != event_id
+            and other.occurred_at > min_occurred
+            and other.magnitude < max_magnitude
+        ]
+
+        # 8. Grupo 2: eventos que YA tenían a este evento como referencia
+        # antes de la corrección. Se sacan del índice inverso.
+        group_2_ids = self.referenced_by.get(event_id, set())
+        affected_group_2 = [self._find_any_event(other_id) for other_id in group_2_ids]
+
+        # Unión sin duplicados (un evento podría estar en los dos grupos).
+        affected_others = {other.event_id: other for other in affected_group_1 + affected_group_2}.values()
+
+        # 9. Foto de referencias viejas: el evento mismo + todos los afectados,
+        # ANTES de recalcular nada.
+        old_references = {event_id: event.reference_id}
+        for other in affected_others:
+            old_references[other.event_id] = other.reference_id
+
+        # 10. Recalcular: primero el evento mismo, luego cada afectado.
+        self._recalculate_reference(event)
+        for other in affected_others:
+            self._recalculate_reference(other)
+
+        # 11. Apilar la acción para poder deshacer todo esto de un solo golpe.
+        self.undo_stack.push(CorrectionAction(
+            event_id=event_id,
+            old_magnitude=old_magnitude,
+            old_depth=old_depth,
+            old_x=old_x,
+            old_y=old_y,
+            old_occurred_at=old_occurred_at,
+            old_is_in_populated_zone=old_is_in_populated_zone,
+            old_revision=old_revision,
+            old_attention_status=old_attention_status,
+            old_references=old_references,
+        ))
+
+        # 12. Devolver el evento corregido.
+        return event
+
+    def mark_reviewed(self, event_id: int) -> Event:
+        """Marca un evento activo como revisado (sección 'Estado de atención').
+
+        No toca P, M ni I, así que no cambia la clave, no reinserta nada en
+        los árboles, y no afecta asociaciones.
+        """
+
+        # 1. Validación: mismo criterio que correct_event, solo se puede
+        # marcar como revisado un evento ACTIVO.
+        if event_id in self.archived_history:
+            raise ValueError(f"El evento {event_id} está archivado, no se puede marcar como revisado")
+        if event_id in self.eliminated_IDs:
+            raise ValueError(f"El evento {event_id} está eliminado, no se puede marcar como revisado")
+        if event_id not in self.event_index:
+            raise KeyError(f"No existe un evento con id {event_id}")
+
+        event = self.event_index[event_id].event
+
+        # 2. Foto del valor viejo, antes de cambiarlo. Es lo único que hace
+        # falta guardar para poder deshacer.
+        old_attention_status = event.attention_status
+
+        # 3. Aplicar el cambio sobre el mismo objeto.
+        event.mark_as_reviwed()
+
+        # 4. No hay paso de árboles/event_index/asociaciones: la clave no
+        # cambió, así que la posición del evento en el AVL y el BST sigue
+        # siendo válida tal cual, y las asociaciones no dependen de este dato.
+
+        # 5. Apilar la acción para poder deshacer.
+        self.undo_stack.push(AttentionChangeAction(event_id, old_attention_status))
+
+        # 6. Devolver el evento ya marcado.
+        return event
+
     
+    def delete_event(self, event_id: int) -> Event:
+        """Eliminación individual de un evento activo (sección 'Eliminación
+        individual'). Solo retira ESE evento; sus descendientes en el AVL
+        quedan intactos (eso lo garantiza el propio delete() del árbol).
+
+        No hay Grupo 1 aquí: un evento que se va del sistema no puede
+        volverse candidato nuevo de nadie. Solo hay que avisarle a quienes
+        YA lo tenían como referencia (Grupo 2).
+        """
+
+        # 1. Validación: mismo criterio que correct_event y mark_reviewed,
+        # solo se puede eliminar un evento ACTIVO.
+        if event_id in self.archived_history:
+            raise ValueError(f"El evento {event_id} está archivado, no se puede eliminar así")
+        if event_id in self.eliminated_IDs:
+            raise ValueError(f"El evento {event_id} ya está eliminado")
+        if event_id not in self.event_index:
+            raise KeyError(f"No existe un evento con id {event_id}")
+
+        node = self.event_index[event_id]
+        event = node.event
+        key = event.key  # se guarda ahora porque, una vez eliminado, ya no hay de dónde sacarla
+
+        # 2-3. Guardar la referencia propia ANTES de limpiarla, y limpiarla con
+        # _assign_reference (ya sabe actualizar referenced_by sin desincronizar).
+        # Si no se guarda antes, el valor se pierde en cuanto se llama.
+        old_references = {event_id: event.reference_id}
+        self._assign_reference(event, None)
+
+        # 4. Retirar el evento de las tres estructuras activas. El orden entre
+        # estas tres no importa: ya tenemos `event` guardado en una variable,
+        # no dependemos de que siga en ninguna de ellas.
+        balance = (self.mode == Mode.NORMAL)
+        self.avl_tree.delete(key, balance=balance)
+        self.bst_tree.delete(key)
+        del self.event_index[event_id]
+
+        # Registrar el id como eliminado. Esto es lo que impide que un reporte
+        # posterior lo reactive (sección "Eliminación individual").
+        self.eliminated_IDs.add(event_id)
+
+        # 5. Grupo 2: quienes YA tenían a este evento como referencia. Se
+        # consigue la lista (es solo un dict.get, no depende de los árboles),
+        # pero se RECALCULA después de que el evento ya salió del AVL/BST —
+        # si se hiciera antes, get_candidates todavía lo vería como válido y
+        # alguien terminaría apuntando a un evento que ya no existe.
+        affected_ids = self.referenced_by.get(event_id, set())
+        affected = [self._find_any_event(other_id) for other_id in affected_ids]
+
+        for other in affected:
+            old_references[other.event_id] = other.reference_id
+
+        for other in affected:
+            self._recalculate_reference(other)
+
+        # 6. Apilar la acción: el evento completo (para poder reinsertarlo tal
+        # cual al deshacer) y las referencias viejas de todos los afectados.
+        self.undo_stack.push(DeletionAction(event, old_references))
+
+        # 7. Devolver el evento ya eliminado (guardado, no el de la estructura).
+        return event
+
+    def change_parameters(self, changes: dict) -> dict:
+        """Cambia uno o varios parámetros globales (L, W, R, T).
+
+        Recibe un dict {nombre: nuevo_valor}. Valida TODOS los nombres y
+        valores antes de aplicar nada (atómico: si uno falla, ninguno se
+        cambia). Ignora los parámetros cuyo valor no cambia realmente.
+
+        Devuelve un dict solo con los parámetros que sí cambiaron.
+
+        Si cambia W o R, redefine qué eventos son candidatos entre sí, así
+        que recalcula la referencia de todos los eventos activos y
+        archivados. En ese caso, la acción guarda old_references para poder
+        deshacer. Para L y T no hay recálculo ni old_references.
+
+        W y R juntos. Si changes = {"W": 24, "R": 50} y ambos cambian:
+        W se aplica primero, se recalculan referencias, se apila acción con old_refs (antes de W).
+        Luego R, se recalculan otra vez, se apila acción con old_refs (que ya refleja el cambio de W).
+        Al deshacer, se revierte R (volviendo R al viejo y restaurando refs de después de W), luego W. \
+        Funciona, aunque recalcula dos veces.
+        """
+        valid_names = {"L", "W", "R", "T"}
+
+        # 1. Validar nombres.
+        for name in changes:
+            if name not in valid_names:
+                raise ValueError(f"Unknown parameter: {name}")
+
+        # 2. Validar valores (por si alguien llama a Scenario directamente).
+        if "L" in changes:
+            new_L = changes["L"]
+            if not isinstance(new_L, int) or isinstance(new_L, bool) or new_L < 0:
+                raise ValueError("L must be a non-negative integer")
+            
+        for name in ("W", "R", "T"):
+            if name in changes and changes[name] <= 0:
+                raise ValueError(f"{name} must be a positive number")
+
+        # 3. Aplicar solo los que cambian de verdad.
+        changed = {}
+
+        for name, new_value in changes.items():
+            old_value = getattr(self, name)
+            if old_value == new_value:
+                continue
+
+            # Foto de referencias antes de tocar el parámetro, solo si aplica.
+            old_refs = None
+            if name in ("W", "R"):
+                old_refs = {
+                    event.event_id: event.reference_id
+                    for event in self._all_active_and_archived_events()
+                }
+
+            # Aplicar el cambio.
+            setattr(self, name, new_value)
+
+            # Recalcular todas las referencias si W o R cambió.
+            if name in ("W", "R"):
+                for event in self._all_active_and_archived_events():
+                    self._recalculate_reference(event)
+
+            # Apilar la acción con el valor viejo y (si aplica) la foto previa.
+            self.undo_stack.push(
+                ParameterChangeAction(name, old_value, old_refs)
+            )
+            changed[name] = new_value
+
+        return changed
+
+    def process_next_report(self) -> dict:
+        """Procesa UN reporte de la cola (sección 8: "un reporte por paso").
+
+        Saca el primero de la cola y decide qué caso es. Los casos posibles
+        están en la tabla de la sección 6: id desconocido (crear), revisión
+        mayor (corregir), igual revisión y mismos datos (confirmar), igual
+        revisión y datos distintos (conflicto), revisión menor (antiguo), e
+        id eliminado (rechazar).
+
+        La igualdad de datos se refiere a magnitud, profundidad, epicentro
+        (x, y) y tiempo de ocurrencia. NO cuenta la estación emisora.
+
+        Aunque el reporte sea rechazado/antiguo/conflicto, se apila una
+        QueueStepAction para poder devolverlo a su posición en la cola al
+        deshacer. Si el caso fue crear o corregir, la QueueStepAction también
+        guarda la acción interna que ese paso generó.
+        """
+
+        # 1. Cola vacía → no hay nada que procesar.
+        if self.report_queue.is_empty():
+            raise ValueError("No hay reportes pendientes en la cola")
+
+        # 2. Peek: miramos el primero sin sacarlo.
+        report = self.report_queue.peek()
+        queue_position = 0   # siempre el primero (la cola es FIFO)
+        event_id = report.event_id
+
+        # 3. Decidir caso y ejecutar.
+        case = None
+        inner_action = None
+        confirmed_station_id = None
+
+        # Caso especial: id eliminado. Se rechaza sin tocar nada.
+        if event_id in self.eliminated_IDs:
+            case = "eliminated"
+
+        # Caso: id desconocido → crear evento nuevo.
+        # "Desconocido" = no está activo ni archivado ni eliminado.
+        elif event_id not in self.event_index and event_id not in self.archived_history:
+            case = "created"
+            self.create_event(
+                event_id=event_id,
+                magnitude=report.magnitude,
+                depth=report.depth,
+                x=report.x,
+                y=report.y,
+                occurred_at=report.occurred_at,
+                stations={report.station},       # el set con la única estación del reporte
+                revision=report.revision_num,    # la primera revisión puede ser > 1
+            )
+            # create_event ya apiló una CreationAction. La sacamos para meterla
+            # dentro del QueueStepAction: un solo paso de la cola = una sola
+            # acción en la pila, no dos.
+            inner_action = self.undo_stack.pop()
+
+        # Caso: id archivado.
+        elif event_id in self.archived_history:
+            archived_event = self.archived_history[event_id]
+            if report.revision_num > archived_event.revision:
+                # Un reporte con revisión mayor REACTIVA el evento archivado:
+                # sale de archived_history y vuelve al AVL con los datos
+                # corregidos (sección 6). Esto es una operación completa por
+                # sí sola, con reubicación en árboles y recálculo de referencias.
+                # PENDIENTE de implementar como helper aparte.
+                case = "archived_needs_reactivation"
+            elif report.revision_num == archived_event.revision:
+                # Confirmación o conflicto sobre un archivado: no lo reactiva.
+                # Se rechaza igual que "antiguo".
+                case = "archived_not_reactivated"
+            else:
+                case = "old"
+
+        # Caso: id activo.
+        else:
+            event = self.event_index[event_id].event
+
+            if report.revision_num > event.revision:
+                # Revisión mayor → corregir.
+                case = "corrected"
+                changes = {
+                    "magnitude": report.magnitude,
+                    "depth": report.depth,
+                    "x": report.x,
+                    "y": report.y,
+                    "occurred_at": report.occurred_at,
+                }
+                self.correct_event(event_id, changes)
+                inner_action = self.undo_stack.pop()
+
+                # Añadir la estación del reporte si aún no estaba.
+                # Si añadirla "tuvo efecto", guardamos su id para poder quitarla
+                # al deshacer el paso de la cola.
+                if report.station not in event.stations:
+                    event.stations.add(report.station)
+                    confirmed_station_id = report.station.station_id
+
+            elif report.revision_num == event.revision:
+                # Igual revisión → ¿mismos datos?
+                same_data = (
+                    report.magnitude == event.magnitude
+                    and report.depth == event.depth
+                    and report.x == event.x
+                    and report.y == event.y
+                    and report.occurred_at == event.occurred_at
+                )
+                if same_data:
+                    # Confirmación.
+                    case = "confirmed"
+                    if report.station not in event.stations:
+                        event.stations.add(report.station)
+                        confirmed_station_id = report.station.station_id
+                else:
+                    # Conflicto: no se toca el evento.
+                    case = "conflict"
+
+            else:
+                # Revisión menor → antiguo.
+                case = "old"
+
+        # 4. Ahora sí, sacar el reporte de la cola.
+        self.report_queue.dequeue()
+
+        # 5. Apilar la acción del paso. Aunque el caso no haya modificado nada
+        # (conflicto, antiguo, eliminado, archivado sin reactivar), la acción
+        # guarda el reporte y su posición para poder devolverlo a la cola al
+        # deshacer.
+        self.undo_stack.push(QueueStepAction(
+            report=report,
+            queue_position=queue_position,
+            inner_action=inner_action,
+            confirmed_station_id=confirmed_station_id,
+        ))
+
+        # 6. Devolver info del paso, para que el frontend muestre qué pasó.
+        return {
+            "case": case,
+            "event_id": event_id,
+            "report": report,
+        }
 
 
-    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
