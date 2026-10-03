@@ -11,7 +11,7 @@ from app.structures.avl_node import AVLNode
 from app.structures.stack import Stack
 from app.structures.queue import Queue 
 from app.domain.action import CreationAction, CorrectionAction, AttentionChangeAction, DeletionAction,ParameterChangeAction, ClockAdvanceAction, QueueStepAction
-from app.structures.avl_tree import AVLTree
+from app.structures.avl_tree import AVLTree, ROTATION_METRIC_KEYS
 from app.structures.avl_node import AVLNode
 from app.structures.bst_node import BSTNode
 from app.structures.bst_tree import BSTTree
@@ -1172,3 +1172,122 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
         acciones de la sección 13, pero la cola sí forma parte del estado
         recuperable."""
         return self.report_queue.clear()
+
+    """==============================================="""
+    """============TREE STATE (VISTAS)================"""
+    """==============================================="""
+
+    # Fotos de solo lectura de los árboles para la interfaz (vista del AVL,
+    # vista comparativa con el BST, sección 11 y 15). Devuelven diccionarios
+    # con datos simples (números, textos, listas, None), listos para JSON.
+    #
+    # Topología PLANA: root_id + una lista de nodos donde cada nodo nombra a
+    # sus vecinos por id (left_id, right_id, parent_id). Es la misma idea del
+    # esquema de carga por topología (sección 12), y evita anidar nodos.
+    #
+    # Cada nodo lleva solo lo necesario para dibujarlo; el detalle completo
+    # del evento (estaciones, revisión, asociaciones) se pide con get_event(id).
+    # La auditoría NO va aquí: es una operación aparte (avl_tree.audit()).
+
+    def get_avl_state(self) -> dict:
+        """Estado actual del AVL activo. Costo O(n)."""
+        tree = self.avl_tree
+        nodes = []
+        self._collect_avl_rows(tree.root, None, 0, nodes)
+        return {
+            "tree": "AVL",
+            "mode": self.mode.value,
+            "size": len(tree),
+            "root_id": tree.root.event.event_id if tree.root is not None else None,
+            "height": tree.height(),
+            "leaves": tree.count_leaves(),
+            "is_avl": tree.is_avl(),
+            "unbalanced_ids": [n.event.event_id for n in tree.unbalanced_nodes()],
+            "L": self.L,
+            "nodes": nodes,
+            "traversals": self._traversal_ids(tree),
+            "rotation_metrics": {k: self.metrics.get(k, 0) for k in ROTATION_METRIC_KEYS},
+        }
+
+    def _collect_avl_rows(self, node, parent_id, depth, rows):
+        """AUXILIAR: preorden recursivo que arma una fila por nodo del AVL.
+        La profundidad se lleva como parámetro al bajar (O(1) por nodo), en
+        vez de llamar depth_of() en cada nodo (O(profundidad) cada vez).
+        Altura y factor de balance se LEEN del nodo: el AVL los guarda."""
+        if node is None:
+            return
+        row = self._event_row(node.event)
+        row.update({
+            "parent_id": parent_id,
+            "left_id": node.left_son.event.event_id if node.left_son else None,
+            "right_id": node.right_son.event.event_id if node.right_son else None,
+            "depth": depth,
+            "height": node.height,
+            "balance_factor": node.balance_factor,
+            "search_cost": depth + 1,  # nodos visitados al buscarlo por clave (sección 9)
+            "costly_access": node.event.priority == 3 and depth > self.L,
+        })
+        rows.append(row)
+        self._collect_avl_rows(node.left_son, row["event_id"], depth + 1, rows)
+        self._collect_avl_rows(node.right_son, row["event_id"], depth + 1, rows)
+
+    def get_bst_state(self) -> dict:
+        """Estado actual del BST de comparación, con la misma forma que
+        get_avl_state para poder dibujarlos y compararlos igual. El BST no
+        guarda altura ni padre: se calculan durante el recorrido. Costo O(n)."""
+        tree = self.bst_tree
+        nodes = []
+        height = self._collect_bst_rows(tree.root, None, 0, nodes)
+        return {
+            "tree": "BST",
+            "size": len(tree),
+            "root_id": tree.root.event.event_id if tree.root is not None else None,
+            "height": height,
+            "leaves": tree.count_leaves(),
+            "nodes": nodes,
+            "traversals": self._traversal_ids(tree),
+        }
+
+    def _collect_bst_rows(self, node, parent_id, depth, rows):
+        """AUXILIAR: agrega la fila al BAJAR (así la lista queda en preorden)
+        y completa altura y factor al REGRESAR de los hijos (como un
+        postorden). Devuelve la altura del subárbol (vacío = -1)."""
+        if node is None:
+            return -1
+        row = self._event_row(node.event)
+        row.update({
+            "parent_id": parent_id,
+            "left_id": node.left_son.event.event_id if node.left_son else None,
+            "right_id": node.right_son.event.event_id if node.right_son else None,
+            "depth": depth,
+            "search_cost": depth + 1,
+        })
+        rows.append(row)
+        left_h = self._collect_bst_rows(node.left_son, row["event_id"], depth + 1, rows)
+        right_h = self._collect_bst_rows(node.right_son, row["event_id"], depth + 1, rows)
+        row["height"] = 1 + max(left_h, right_h)
+        row["balance_factor"] = left_h - right_h  # informativo: el BST nunca rota
+        return row["height"]
+
+    @staticmethod
+    def _event_row(event) -> dict:
+        """AUXILIAR: datos del evento que se necesitan para dibujar su nodo."""
+        p, m, i = event.key
+        return {
+            "event_id": i,
+            "label": f"SIS-{i:06d}",
+            "key": [p, m, i],
+            "priority": p,
+            "magnitude": m,
+            "attention_status": event.attention_status.value,
+        }
+
+    @staticmethod
+    def _traversal_ids(tree) -> dict:
+        """AUXILIAR: recorridos del árbol como listas de ids (no de Event)."""
+        return {
+            "inorder": [e.event_id for e in tree.inorder()],
+            "preorder": [e.event_id for e in tree.preorder()],
+            "postorder": [e.event_id for e in tree.postorder()],
+            "level_order": [e.event_id for e in tree.level_order()],
+        }
