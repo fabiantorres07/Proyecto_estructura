@@ -1,3 +1,4 @@
+from datetime import timedelta
 from app.structures.avl_node import AVLNode
 
 # Claves de las métricas de rotación que exige la sección 14 del enunciado.
@@ -714,3 +715,68 @@ class AVLTree:
             issues.append(self._issue(node, "imbalance", severity, f"Factor de balance {real_balance}"))
 
         return real_height
+
+    # ==================================================================
+    # Archivo masivo: subárboles elegibles (sección 10)
+    # ==================================================================
+
+    def eligible_archive_subtrees(self, clock, T):
+        """Devuelve TODOS los subárboles elegibles para archivar.
+
+        Un subárbol es elegible si todos sus eventos tienen prioridad baja
+        (P = 1) y antigüedad estrictamente mayor que T horas, donde
+        antigüedad = clock - occurred_at. Una hoja también es un subárbol.
+
+        El árbol no conoce el reloj ni T (viven en Scenario), por eso los
+        recibe como parámetros, igual que `balance` en insert/delete.
+
+        Devuelve una lista de dicts, uno por subárbol elegible:
+            {"root": AVLNode, "root_id": int, "size": int, "depth": int}
+        con lo necesario para el desempate (tamaño, profundidad de la raíz,
+        id de la raíz), que lo hace Scenario. Lista vacía = no hay ramas
+        elegibles. Incluye también los subárboles anidados dentro de otro
+        elegible (al desempatar por tamaño nunca gana uno anidado).
+        Costo: O(n), un solo recorrido."""
+        result = []
+        self._collect_eligible(self.root, 0, clock, timedelta(hours=T), result)
+        return result
+
+    def _collect_eligible(self, node, depth, clock, min_age, result):
+        """Recorrido POSTORDEN: primero los hijos, luego el nodo, porque un
+        nodo solo sabe si su subárbol es elegible cuando ya sabe si lo son
+        los de sus hijos. Devuelve (subárbol_elegible, tamaño_del_subárbol).
+
+        - Un subárbol vacío cuenta como elegible ("todos sus eventos
+          cumplen" es cierto si no hay eventos); así una hoja es elegible
+          si ella misma cumple.
+        - SIEMPRE se recorren los dos hijos, aunque este nodo no cumpla:
+          dentro de una rama no elegible puede haber subárboles elegibles."""
+        if node is None:
+            return True, 0
+
+        left_ok, left_size = self._collect_eligible(node.left_son, depth + 1, clock, min_age, result)
+        right_ok, right_size = self._collect_eligible(node.right_son, depth + 1, clock, min_age, result)
+
+        event = node.event
+        node_ok = event.priority == 1 and (clock - event.occurred_at) > min_age
+        size = 1 + left_size + right_size
+        eligible = node_ok and left_ok and right_ok
+
+        if eligible:
+            result.append({"root": node, "root_id": event.event_id, "size": size, "depth": depth})
+        return eligible, size
+
+    def subtree_event_ids(self, node):
+        """Ids de todos los eventos del subárbol que empieza en `node`
+        (inorden). Sirve para fijar el conjunto a archivar ANTES de
+        modificar el árbol y mostrarlo al usuario. Costo: O(tamaño)."""
+        ids = []
+        self._collect_subtree_ids(node, ids)
+        return ids
+
+    def _collect_subtree_ids(self, node, ids):
+        if node is None:
+            return
+        self._collect_subtree_ids(node.left_son, ids)
+        ids.append(node.event.event_id)
+        self._collect_subtree_ids(node.right_son, ids)
