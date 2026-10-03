@@ -187,6 +187,7 @@ const StationsDashboard: React.FC = () => {
                 <div className="min-w-0">
                     <GenericTable
                         data={stations}
+                        columnLabels={{station_id: "estación"}}
                         columns={["station_id", "x", "y"]}
                         actions={[
                             { name: "select", label: "Seleccionar" },

@@ -8,11 +8,18 @@ interface Action {
 interface GenericTableProps {
     data: Record<string, any>[];
     columns: string[];
-    actions: Action[];
-    onAction: (name: string, item: Record<string, any>) => void;
+    actions?: Action[];
+    columnLabels?: Record<string, string>;
+    onAction?: (name: string, item: Record<string, any>) => void;
 }
 
-const GenericTable: React.FC<GenericTableProps> = ({ data, columns, actions, onAction }) => {
+const GenericTable: React.FC<GenericTableProps> = ({
+    data,
+    columns,
+    actions = [],
+    columnLabels = {},
+    onAction,
+}) => {
     return (
         <div className="rounded-sm border border-stroke bg-white shadow-default dark:border-strokedark dark:bg-boxdark">
             <div className="max-w-full overflow-x-auto">
@@ -26,12 +33,14 @@ const GenericTable: React.FC<GenericTableProps> = ({ data, columns, actions, onA
                                         index === 0 ? "xl:pl-11" : ""
                                     }`}
                                 >
-                                    {col}
+                                    {columnLabels[col] ?? col}
                                 </th>
                             ))}
-                            <th className="py-4 px-4 font-medium text-black dark:text-white">
-                                Actions
-                            </th>
+                            {actions.length > 0 && (
+                                <th className="py-4 px-4 font-medium text-black dark:text-white">
+                                    Acciones
+                                </th>
+                            )}
                         </tr>
                     </thead>
 
@@ -51,12 +60,13 @@ const GenericTable: React.FC<GenericTableProps> = ({ data, columns, actions, onA
                                     </td>
                                 ))}
 
+                                {actions.length > 0 && (
                                 <td className="border-b border-[#eee] py-5 px-4 dark:border-strokedark">
                                     <div className="flex flex-wrap items-center gap-3.5">
                                         {actions.map((action) => (
                                             <button
                                                 key={action.name}
-                                                onClick={() => onAction(action.name, item)}
+                                                onClick={() => onAction?.(action.name, item)}
                                                 className="hover:text-primary"
                                                 title={action.label}
                                                 type="button"
@@ -114,6 +124,7 @@ const GenericTable: React.FC<GenericTableProps> = ({ data, columns, actions, onA
                                         ))}
                                     </div>
                                 </td>
+                                )}
                             </tr>
                         ))}
                     </tbody>

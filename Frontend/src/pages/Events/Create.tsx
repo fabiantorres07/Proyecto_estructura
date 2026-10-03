@@ -1,7 +1,5 @@
-import { ReportFormValues } from '../../models/Report/ReportFormValues';
-import ReportFormValidator from '../../components/reports/ReportFormValidator';
-import { reportService } from '../../services/reportService';
-import { Report } from '../../models/Report/Report';
+import { Event } from '../../models/event';
+import EventFormValidator from '../../components/events/EventFormValidator';
 import { Station } from '../../models/Station';
 import { stationService } from '../../services/stationService';
 import Swal from 'sweetalert2';
@@ -11,7 +9,7 @@ import { useEffect, useState } from 'react';
 import { getApiErrorMessage } from '../../utils/utils';
 
 
-const CreateReport = () => {
+const CreateEvent = () => {
     const navigate = useNavigate();
     const [stations, setStations] = useState<Station[]>([]);
     useEffect(() => {
@@ -31,27 +29,18 @@ const CreateReport = () => {
         }
     };
     // Creation logic
-    const handleCreateReport = async (report: ReportFormValues) => {
+    const handleCreateEvent = async (event: Event) => {
 
         try {
-            const newReport: Report = {
-                event_id: report.event_id,
-                station_id: report.station_id,
-                magnitude: report.magnitude,
-                depth: report.depth,
-                x: report.x,
-                y: report.y,
-                ...(report.ocurred_at ? { ocurred_at: report.ocurred_at } : {}),
-            }
-            const createdReport = await reportService.createReport(newReport);
-            if (createdReport) {
+            const createdEvent = await eventService.createReport(event);
+            if (createdEvent) {
                 Swal.fire({
                     title: "Completado",
-                    text: `Se ha agregado el reporte a la cola, el número de revisión es ${createdReport.revision_num} y su posición actual en la cola es ${createdReport.position}`,
+                    text: `Se ha creado el evento ${createdEvent.event_id}`,
                     icon: "success",
                     timer: 3000
                 })
-                console.log("Reporte creado con éxito:", createdReport);
+                console.log("Evento creado con éxito: ", createdEvent );
                 navigate("/reportes/cola");
             } else {
                 Swal.fire({
@@ -73,10 +62,10 @@ const CreateReport = () => {
     return (
         <div>
             {/* Form for report creation */}
-            <h2>Crear reporte</h2>
+            <h2>Crear evento</h2>
             <Breadcrumb pageName="Crear reporte" />
-            <ReportFormValidator
-                handleAction={handleCreateReport}
+            <EventFormValidator
+                handleAction={handleCreateEvent}
                 mode={1} // 1 stands for creation
                 stations= {stations}
             />
@@ -84,5 +73,5 @@ const CreateReport = () => {
     );
 };
 
-export default CreateReport;
+export default CreateEvent;
 

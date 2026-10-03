@@ -1115,6 +1115,27 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
                 f"simulation clock ({self.simulation_clock.replace(microsecond=0).isoformat()})"
             )
 
+    def next_report_revision(self, event_id: int, preceding_reports: Optional[list[Report]] = None,) -> int:
+        """Return the next revision after the latest queued or staged report.
+
+        If this event has no pending report, continue from its current active
+        or archived revision. A new event starts at revision 1.
+        """
+        queued_and_staged = self.report_queue.items() + (preceding_reports or [])
+        for report in reversed(queued_and_staged):
+            if report.event_id == event_id:
+                return report.revision_num + 1
+
+        node = self.event_index.get(event_id)
+        if node is not None:
+            return node.event.revision + 1
+
+        archived_event = self.archived_history.get(event_id)
+        if archived_event is not None:
+            return archived_event.revision + 1
+
+        return 1
+
     def enqueue_report(self, report: Report) -> int:
         """Agrega un reporte al final de la cola FIFO y devuelve su posición
         (1 = el próximo en procesarse). Si no es válido, lanza la excepción

@@ -1,10 +1,12 @@
 export interface ReportFormValues{
-    event_id: string;
+    position: number;
+    event_id: number;
     revision_num?: number | null;
-    station: string;
+    station_id: string;
     magnitude: number;
     depth: number;
     x: number;
     y: number;
-    ocurred_at: Date;
+    ocurred_at?: Date;
 }
+
