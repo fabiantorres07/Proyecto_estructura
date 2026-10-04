@@ -3,6 +3,7 @@ from enum import Enum
 from datetime import datetime, timedelta, timezone
 from time import monotonic
 from typing import Optional
+import math
 from app.domain.zone import Zone
 from app.domain.station import Station
 from app.domain.report import Report
@@ -17,7 +18,7 @@ from app.domain.action import (
     ParameterChangeAction, ClockAdvanceAction, QueueStepAction, MassArchiveAction,
     GlobalRecoveryAction, LoadAction, ReactivationAction,
 )
-from app.structures.avl_tree import AVLTree, ROTATION_METRIC_KEYS
+from app.structures.avl_tree import AVLTree, ROTATION_METRIC_KEYS, AVLTopologySnapshot
 from app.structures.avl_node import AVLNode
 from app.structures.bst_node import BSTNode
 from app.structures.bst_tree import BSTTree
@@ -1562,10 +1563,13 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
     def _undo_load(self, action: LoadAction) -> dict:
         """Deshace la carga de un escenario restaurando el estado anterior.
 
-        PENDIENTE: depende de cómo se implemente la carga de escenario
-        (sección 12).
+        action.previous_state es el dict que armó _snapshot_full_state()
+        justo antes de cargar (ver "ESTADO COMPLETO DEL ESCENARIO"): los
+        objetos originales del escenario anterior, intactos, con la
+        topología real del AVL y del BST. Se vuelven a poner en self.
         """
-        raise NotImplementedError("_undo_load pendiente")
+        self._restore_full_state(action.previous_state)
+        return {"undone": "load"}
 
     def first_k_pending(self, k: int) -> tuple[list[Event], int]:
         """Primeros k eventos pendientes de atención, en orden descendente
@@ -1691,6 +1695,867 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
         if event.depth <= max_depth and min_date <= event.occurred_at <= max_date:
             result.append(event)
         self._collect_by_depth_and_date(node.right_son, max_depth, min_date, max_date, result, counter)
+
+    def costly_access_events(self) -> list[dict]:
+        """Eventos activos de prioridad alta con acceso costoso.
+
+        Sección 11, última consulta: "Eventos de prioridad alta con acceso
+        costoso, indicando profundidad del nodo, límite y número de nodos
+        visitados en su búsqueda por clave."
+        Sección 9: un evento de prioridad alta (P = 3) tiene acceso costoso
+        cuando su profundidad en el AVL es ESTRICTAMENTE mayor que L.
+
+        Es un wrapper de avl_tree.costly_access(L): el árbol hace el
+        recorrido, pero no conoce L (solo recibe un número), así que no
+        puede decir con qué límite comparó. Scenario sí lo conoce y lo
+        agrega a cada resultado.
+
+        Devuelve una lista de dicts, uno por evento con acceso costoso:
+            {"event": Event, "depth": int, "visited": int, "limit": int}
+        - depth: profundidad del nodo (raíz = 0).
+        - visited: nodos visitados al buscarlo por clave = depth + 1.
+        - limit: el L vigente con el que se comparó.
+        Lista vacía = ningún evento de prioridad alta supera L.
+
+        Se lee self.L en el momento de la consulta, así que si el usuario
+        cambia L (change_parameters) la siguiente consulta ya usa el nuevo.
+        Costo: O(n), recorre todo el árbol."""
+        limit = self.L
+        result = self.avl_tree.costly_access(limit)
+        for item in result:
+            item["limit"] = limit
+        return result
+
+    def verify_structure(self) -> dict:
+        """Opción "Verificar estructura" (sección 14), disponible en ambos
+        modos.
+
+        Es un wrapper de avl_tree.audit(): el árbol revisa TODO (orden
+        global por K contra los límites de todos los ancestros, unicidad
+        de ids, ciclos o nodos compartidos, punteros parent, alturas y
+        factores de balance recalculados contra los guardados). Lo que
+        agrega Scenario es el modo actual:
+        - Modo NORMAL → require_balance=True: un factor fuera de {-1, 0, 1}
+          es un error.
+        - Modo STRESS → require_balance=False: el desbalance se informa
+          como "expected" (esperado), distinto de los errores de orden o
+          de metadatos, como pide la sección 14.
+
+        Devuelve un dict pensado para que la interfaz lo muestre directo:
+            {
+              "mode": "Normal" | "Stress",
+              "checked_nodes": int,          # eventos activos revisados
+              "is_valid": bool,              # True si no hay ningún "error"
+              "is_avl": bool,                # True si no hay ningún desbalance
+              "error_count": int,            # problemas con severity "error"
+              "expected_count": int,         # desbalances esperados (estrés)
+              "inconsistent_event_ids": [int],  # un id por evento con error
+              "issues": [ {event_id, type, severity, detail}, ... ],
+            }
+        `issues` es la lista tal cual la devuelve audit(); todos sus
+        valores son datos simples (listos para JSON). Un mismo evento puede
+        tener varios problemas (por ejemplo altura y factor), por eso
+        inconsistent_event_ids los agrupa sin repetir.
+
+        `is_valid` es lo que debe consultar la recuperación global antes
+        de volver a modo normal (sección 8: "El retorno al modo normal solo
+        se completa cuando la auditoría confirma el equilibrio"): en ese
+        momento se exige is_valid e is_avl.
+        Costo: O(n)."""
+        require_balance = (self.mode == Mode.NORMAL)
+        issues = self.avl_tree.audit(require_balance=require_balance)
+
+        errors = [issue for issue in issues if issue["severity"] == "error"]
+        expected = [issue for issue in issues if issue["severity"] == "expected"]
+
+        # Ids de eventos con errores reales, sin repetir y en orden de
+        # aparición (None = problema global, por ejemplo el tamaño).
+        inconsistent_ids = []
+        for issue in errors:
+            event_id = issue["event_id"]
+            if event_id is not None and event_id not in inconsistent_ids:
+                inconsistent_ids.append(event_id)
+
+        return {
+            "mode": self.mode.value,
+            "checked_nodes": len(self.avl_tree),
+            "is_valid": len(errors) == 0,
+            "is_avl": not any(issue["type"] == "imbalance" for issue in issues),
+            "error_count": len(errors),
+            "expected_count": len(expected),
+            "inconsistent_event_ids": inconsistent_ids,
+            "issues": issues,
+        }
+
+    """==============================================="""
+    """========RECUPERACIÓN GLOBAL (SECCIÓN 8)========"""
+    """==============================================="""
+
+    def recover_balance(self) -> dict:
+        """Recuperación global del AVL (sección 8) como UNA acción que se
+        puede deshacer (sección 13).
+
+        Pasos:
+        1. Foto de la forma del árbol ANTES de rotar
+           (avl_tree.snapshot_topology). Guardar solo la raíz no basta:
+           las rotaciones cambian los enlaces de esos mismos nodos.
+        2. Reparar SOLO con rotaciones (avl_tree.recover_balance), sin
+           vaciar ni reconstruir el árbol. Funciona con desbalances > 2.
+        3. Capturar lo que sumó a las métricas (avl_tree.last_rotation_delta)
+           para restarlo al deshacer.
+        4. Auditar (verify_structure). La sección 8 dice: "El retorno al
+           modo normal solo se completa cuando la auditoría confirma el
+           equilibrio". Por eso el modo pasa a NORMAL solo si la auditoría
+           no encontró errores ni desbalances.
+        5. Apilar GlobalRecoveryAction(snapshot, delta, modo_anterior), solo
+           si algo cambió (hubo rotaciones o cambió el modo), igual que
+           update_simulation_clock no apila un cambio que no cambió nada.
+
+        El BST no se toca: es el árbol de comparación, nunca rota.
+        La sección 8 también pide pausar el procesamiento de reportes: aquí
+        no hay procesamiento continuo en el backend (cada paso es una
+        petición), así que la interfaz debe detener su ciclo antes de
+        llamar a esta operación.
+
+        _undo_global_recovery (ya existía) la deshace: restore_topology +
+        revert_rotation_metrics + modo anterior.
+
+        Devuelve un dict para mostrar en la interfaz:
+            {"previous_mode", "mode", "cases", "elementary_rotations",
+             "rotations": [{"case", "event_id", "balance_factor",
+                            "rotations"}, ...],
+             "rotation_delta", "audit" (lo de verify_structure),
+             "recorded" (True si se apiló la acción)}
+        Costo: O(n) + rotaciones."""
+        previous_mode = self.mode
+
+        # 1. Foto ANTES de tocar el árbol.
+        snapshot = self.avl_tree.snapshot_topology()
+
+        # 2. Reparar con rotaciones.
+        rotations = self.avl_tree.recover_balance()
+
+        # 3. Delta de métricas de esta operación.
+        rotation_delta = self.avl_tree.last_rotation_delta()
+
+        # 4. Solo se vuelve a modo normal si la auditoría lo confirma.
+        audit = self.verify_structure()
+        if audit["is_valid"] and audit["is_avl"] and self.mode != Mode.NORMAL:
+            self.mode = Mode.NORMAL
+            audit = self.verify_structure()  # el reporte final ya en modo normal
+
+        # 5. Apilar solo si hubo cambios.
+        recorded = bool(rotations) or self.mode != previous_mode
+        if recorded:
+            self.undo_stack.push(GlobalRecoveryAction(snapshot, rotation_delta, previous_mode))
+
+        return {
+            "previous_mode": previous_mode.value,
+            "mode": self.mode.value,
+            "cases": len(rotations),
+            "elementary_rotations": sum(len(entry["rotations"]) for entry in rotations),
+            "rotations": rotations,
+            "rotation_delta": rotation_delta,
+            "audit": audit,
+            "recorded": recorded,
+        }
+
+    """==============================================="""
+    """====ESTADO COMPLETO Y CARGA (SECCIONES 12-13)==="""
+    """==============================================="""
+
+    # ESTADO COMPLETO DEL ESCENARIO
+    #
+    # Es todo lo que reemplaza una carga y lo que guarda LoadAction para
+    # poder deshacerla: AVL (estructura real), BST (estructura real),
+    # event_index, archived_history, eliminated_IDs, referenced_by, zones,
+    # stations, report_queue, reloj, L, W, R, T, mode y metrics.
+    #
+    # Decisión: se guardan los OBJETOS ORIGINALES, no copias profundas.
+    # - Es seguro porque una carga NUNCA modifica el estado viejo: construye
+    #   objetos nuevos y los asigna a self (_restore_full_state). El estado
+    #   viejo queda intacto dentro de LoadAction, con su topología exacta
+    #   (son los mismos nodos, con los mismos enlaces y alturas).
+    # - Es NECESARIO conservar la identidad: las acciones apiladas ANTES de
+    #   la carga guardan referencias a nodos y eventos reales (por ejemplo
+    #   MassArchiveAction guarda archived_root y former_parent, que son
+    #   AVLNode del árbol). Si se restaurara una copia profunda, esos nodos
+    #   ya no estarían en el árbol restaurado y deshacer el archivo lo
+    #   rompería.
+    # - Memoria: O(1) por la foto (solo referencias), en vez de O(n).
+    #
+    # El reloj se guarda como VALOR (self.simulation_clock en ese instante)
+    # y se restaura con el setter, igual que ClockAdvanceAction. Guardar el
+    # ancla monotónica vieja haría que, al deshacer, el reloj "saltara" lo
+    # que duró el escenario cargado.
+    #
+    # La pila de deshacer NO es parte del estado: es la historia. La
+    # LoadAction se apila encima de las acciones anteriores, y al deshacer
+    # la carga esas acciones vuelven a aplicar sobre el estado restaurado.
+
+    def _snapshot_full_state(self) -> dict:
+        """AUXILIAR: foto del estado operativo completo (ver arriba)."""
+        return {
+            "avl_tree": self.avl_tree,
+            "bst_tree": self.bst_tree,
+            "event_index": self.event_index,
+            "archived_history": self.archived_history,
+            "eliminated_IDs": self.eliminated_IDs,
+            "referenced_by": self.referenced_by,
+            "zones": self.zones,
+            "stations": self.stations,
+            "report_queue": self.report_queue,
+            "simulation_clock": self.simulation_clock,
+            "L": self.L,
+            "W": self.W,
+            "R": self.R,
+            "T": self.T,
+            "mode": self.mode,
+            "metrics": self.metrics,
+        }
+
+    def _restore_full_state(self, state: dict) -> None:
+        """AUXILIAR: reemplaza el estado operativo por el de `state` (un
+        dict con la forma de _snapshot_full_state). La usan load_scenario
+        (para poner el estado nuevo) y _undo_load (para volver al viejo).
+        No toca undo_stack. Mantiene que self.metrics sea el MISMO dict que
+        usa self.avl_tree (una sola fuente de verdad para las rotaciones)."""
+        self.avl_tree = state["avl_tree"]
+        self.bst_tree = state["bst_tree"]
+        self.event_index = state["event_index"]
+        self.archived_history = state["archived_history"]
+        self.eliminated_IDs = state["eliminated_IDs"]
+        self.referenced_by = state["referenced_by"]
+        self.zones = state["zones"]
+        self.stations = state["stations"]
+        self.report_queue = state["report_queue"]
+        self.simulation_clock = state["simulation_clock"]  # setter: reinicia el ancla
+        self.L = state["L"]
+        self.W = state["W"]
+        self.R = state["R"]
+        self.T = state["T"]
+        self.mode = state["mode"]
+        self.metrics = state["metrics"]
+        self.avl_tree.metrics = self.metrics
+
+    def load_scenario(self, data: dict) -> dict:
+        """Carga un escenario desde un archivo JSON (sección 12) como UNA
+        acción que se puede deshacer (sección 13).
+
+        Recibe el JSON YA PARSEADO (dict). Leer el archivo que el usuario
+        elige en el explorador y hacer json.loads le toca al router/front.
+
+        Regla general: validar TODO primero y aplicar después. El estado
+        nuevo se construye en objetos nuevos; self no se toca hasta que
+        todo valida. Si algo falla se lanza ValueError con el primer error
+        (dónde está y por qué) y el escenario actual queda igual.
+
+        Si todo valida:
+        1. previous_state = self._snapshot_full_state()
+        2. self._restore_full_state(estado_nuevo)
+        3. self.undo_stack.push(LoadAction(previous_state))
+
+        ESQUEMA DEL ARCHIVO (decisión del equipo, sección 12):
+        {
+          "load_mode": "insertions" | "topology",        (obligatorio)
+          "simulation_clock": "2026-09-07T12:00:00Z",    (opcional)
+          "parameters": {"L": 3, "W": 48, "R": 40, "T": 72},  (opcional)
+          "zones": [{"name", "x_min", "x_max", "y_min", "y_max",
+                     "is_populated"}],                   (opcional)
+          "stations": [{"station_id", "x", "y"}],        (opcional)
+          ... y lo propio de cada modo (ver abajo).
+        }
+        Lo opcional que no venga se HEREDA del escenario actual (la sección
+        9 permite configurar L "antes de cargar los datos"). Lo heredado se
+        informa en "inherited".
+
+        Modo "insertions":
+          "events": [{"event_id", "magnitude", "depth", "x", "y",
+                      "occurred_at", "station_id"}, ...]
+          Se insertan en ese orden, con balanceo activo, en un AVL y un BST
+          (create_event: revisión 1, pendiente, asociaciones). Queda en modo
+          NORMAL. Sin histórico, eliminados ni cola. Las métricas empiezan
+          en cero más las rotaciones de la propia carga.
+
+        Modo "topology" (el guardado estructural completo):
+          "avl": {"root_id": int | null,
+                  "nodes": [{"event_id", "magnitude", "depth", "x", "y",
+                             "occurred_at", "revision", "stations": [ids],
+                             "attention_status": "pending" | "reviewed",
+                             "priority", "height", "balance_factor",
+                             "left_id": int | null, "right_id": int | null,
+                             "reference_id" (opcional, se verifica)}]},
+          "archived": [{mismos datos del evento, sin enlaces}],  (opcional)
+          "eliminated_ids": [int],                                (opcional)
+          "report_queue": [{"event_id", "revision_num", "station_id",
+                            "magnitude", "depth", "x", "y",
+                            "occurred_at"}],                      (opcional)
+          "mode": "Normal" | "Stress",                            (opcional)
+          "metrics": {"LL": 0, ...}                               (opcional)
+          La topología se recupera TAL CUAL (sin reinsertar). Las
+          asociaciones se reconstruyen con la misma política determinista
+          (si el archivo trae reference_id, debe coincidir). El BST se
+          reconstruye insertando en preorden del AVL, así queda con la
+          misma forma que el AVL cargado.
+
+        Fechas: texto ISO 8601 con zona horaria ("...Z") o datetime.
+
+        Devuelve un resumen: load_mode, mode, cantidades, warnings,
+        inherited, y raíz/altura/profundidad máxima/hojas de ambos árboles
+        (lo que la sección 12 pide mostrar al terminar la carga)."""
+        if not isinstance(data, dict):
+            raise self._load_error("archivo", "el contenido debe ser un objeto JSON")
+
+        load_mode = data.get("load_mode")
+        if load_mode not in ("insertions", "topology"):
+            raise self._load_error(
+                "load_mode", f"debe ser 'insertions' o 'topology' (llegó {load_mode!r})"
+            )
+
+        general = self._load_general_sections(data)
+        if load_mode == "insertions":
+            new_state, warnings = self._build_state_from_insertions(data, general)
+        else:
+            new_state, warnings = self._build_state_from_topology(data, general)
+
+        # Todo validó: ahora sí se aplica.
+        previous_state = self._snapshot_full_state()
+        self._restore_full_state(new_state)
+        self.undo_stack.push(LoadAction(previous_state))
+
+        return {
+            "load_mode": load_mode,
+            "mode": self.mode.value,
+            "active_events": len(self.avl_tree),
+            "archived_events": len(self.archived_history),
+            "eliminated_ids": len(self.eliminated_IDs),
+            "queued_reports": len(self.report_queue),
+            "warnings": warnings,
+            "inherited": general["inherited"],
+            "avl": self._load_tree_summary(self.avl_tree),
+            "bst": self._load_tree_summary(self.bst_tree),
+        }
+
+    # ---------------- AUXILIARES DE LA CARGA ----------------
+
+    _INSERTION_EVENT_FIELDS = ("event_id", "magnitude", "depth", "x", "y", "occurred_at", "station_id")
+    _STORED_EVENT_FIELDS = ("event_id", "magnitude", "depth", "x", "y", "occurred_at",
+                            "revision", "stations", "attention_status")
+    _TOPOLOGY_NODE_FIELDS = _STORED_EVENT_FIELDS + ("priority", "height", "balance_factor", "left_id", "right_id")
+    _REPORT_FIELDS = ("event_id", "revision_num", "station_id", "magnitude", "depth", "x", "y", "occurred_at")
+    # Orden en que se informan los errores de la auditoría al cargar
+    # (primero referencias y unicidad, luego orden, luego metadatos).
+    _AUDIT_ERROR_ORDER = ("reference", "uniqueness", "size", "order", "height", "balance_factor")
+
+    @staticmethod
+    def _load_error(where: str, message: str) -> ValueError:
+        """AUXILIAR: error de carga con el lugar exacto del problema."""
+        return ValueError(f"Carga rechazada. {where}: {message}")
+
+    @staticmethod
+    def _load_tree_summary(tree) -> dict:
+        """AUXILIAR: raíz, altura, profundidad máxima y hojas (sección 12).
+        La profundidad máxima de un árbol es su altura (raíz = 0)."""
+        height = tree.height()
+        return {
+            "root_id": tree.root.event.event_id if tree.root is not None else None,
+            "height": height,
+            "max_depth": height if height >= 0 else None,
+            "leaves": tree.count_leaves(),
+        }
+
+    def _load_require(self, raw, fields, where: str) -> None:
+        """AUXILIAR: `raw` debe ser un objeto con todos los `fields`."""
+        if not isinstance(raw, dict):
+            raise self._load_error(where, "debe ser un objeto")
+        missing = [field for field in fields if field not in raw]
+        if missing:
+            raise self._load_error(where, f"faltan campos obligatorios: {', '.join(missing)}")
+
+    def _load_list(self, data: dict, key: str, required: bool = False) -> list:
+        """AUXILIAR: lee una lista del archivo ([] si es opcional y no viene)."""
+        if key not in data:
+            if required:
+                raise self._load_error(key, "falta esta sección")
+            return []
+        value = data[key]
+        if not isinstance(value, list):
+            raise self._load_error(key, "debe ser una lista")
+        return value
+
+    def _load_number(self, value, where: str, field: str, low: float, high: float, one_decimal: bool = True) -> float:
+        """AUXILIAR: número finito en [low, high], con máximo un decimal
+        (mismo criterio que _check_one_decimal en schemas/report.py)."""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise self._load_error(where, f"{field} debe ser un número (llegó {value!r})")
+        if not math.isfinite(value):
+            raise self._load_error(where, f"{field} debe ser un número finito")
+        if not (low <= value <= high):
+            raise self._load_error(where, f"{field} = {value} fuera del rango [{low}, {high}]")
+        if one_decimal and abs(value * 10 - round(value * 10)) > 1e-9:
+            raise self._load_error(where, f"{field} = {value} tiene más de un decimal")
+        return round(float(value), 1) if one_decimal else float(value)
+
+    def _load_int(self, value, where: str, field: str, low: int, high: Optional[int] = None) -> int:
+        """AUXILIAR: entero (no booleano) en [low, high]."""
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise self._load_error(where, f"{field} debe ser un entero (llegó {value!r})")
+        if value < low or (high is not None and value > high):
+            limit = f"[{low}, {high}]" if high is not None else f">= {low}"
+            raise self._load_error(where, f"{field} = {value} fuera del rango {limit}")
+        return value
+
+    def _load_datetime(self, value, where: str, field: str) -> datetime:
+        """AUXILIAR: fecha ISO 8601 con zona horaria y precisión de
+        segundos, normalizada a UTC (mismo criterio que ReportCreate)."""
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value)
+            except ValueError:
+                raise self._load_error(where, f"{field} no es una fecha ISO 8601 válida ({value!r})") from None
+        if not isinstance(value, datetime):
+            raise self._load_error(where, f"{field} debe ser una fecha ISO 8601")
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise self._load_error(where, f"{field} debe incluir zona horaria (por ejemplo ...Z)")
+        if value.microsecond != 0:
+            raise self._load_error(where, f"{field} debe tener precisión de segundos")
+        return value.astimezone(timezone.utc)
+
+    def _load_station_id(self, value, where: str, field: str) -> str:
+        """AUXILIAR: id de estación, texto no vacío (como StationCreate)."""
+        if not isinstance(value, str) or not value:
+            raise self._load_error(where, f"{field} debe ser un texto no vacío")
+        return value
+
+    def _load_event_values(self, raw: dict, where: str, clock: datetime) -> dict:
+        """AUXILIAR: datos físicos de un evento (secciones 3 y 12): id,
+        magnitud, profundidad, epicentro y fecha (no posterior al reloj)."""
+        values = {
+            "event_id": self._load_int(raw["event_id"], where, "event_id", 1, 999999),
+            "magnitude": self._load_number(raw["magnitude"], where, "magnitude", -2.0, 10.0),
+            "depth": self._load_number(raw["depth"], where, "depth", 0.0, 700.0),
+            "x": self._load_number(raw["x"], where, "x", 0.0, 1000.0),
+            "y": self._load_number(raw["y"], where, "y", 0.0, 1000.0),
+            "occurred_at": self._load_datetime(raw["occurred_at"], where, "occurred_at"),
+        }
+        if values["occurred_at"] > clock:
+            raise self._load_error(
+                where, f"occurred_at {values['occurred_at'].isoformat()} es posterior al reloj "
+                    f"de simulación {clock.replace(microsecond=0).isoformat()}"
+            )
+        return values
+
+    def _load_stored_event(self, raw: dict, where: str, clock: datetime) -> dict:
+        """AUXILIAR: evento guardado (activo o archivado): datos físicos +
+        revisión, estaciones aceptadas y estado de atención."""
+        values = self._load_event_values(raw, where, clock)
+        values["revision"] = self._load_int(raw["revision"], where, "revision", 1)
+        if not isinstance(raw["stations"], list):
+            raise self._load_error(where, "stations debe ser una lista de ids de estación")
+        values["station_ids"] = [self._load_station_id(s, where, "stations[]") for s in raw["stations"]]
+        try:
+            values["attention_status"] = AttentionStatus(raw["attention_status"])
+        except (ValueError, TypeError):
+            raise self._load_error(
+                where, f"attention_status debe ser 'pending' o 'reviewed' (llegó {raw['attention_status']!r})"
+            ) from None
+        return values
+
+    def _load_general_sections(self, data: dict) -> dict:
+        """AUXILIAR: reloj, parámetros, zonas y estaciones del archivo. Lo
+        que no venga se hereda del escenario actual (en contenedores
+        NUEVOS, para no compartir listas/dicts con el estado viejo, que
+        queda guardado en LoadAction)."""
+        inherited = []
+
+        if "simulation_clock" in data:
+            clock = self._load_datetime(data["simulation_clock"], "simulation_clock", "simulation_clock")
+        else:
+            clock = self.simulation_clock
+            inherited.append("simulation_clock")
+
+        params = data.get("parameters", {})
+        if not isinstance(params, dict):
+            raise self._load_error("parameters", "debe ser un objeto")
+        values = {}
+        for name in ("L", "W", "R", "T"):
+            if name not in params:
+                values[name] = getattr(self, name)
+                inherited.append(name)
+            elif name == "L":
+                values["L"] = self._load_int(params["L"], "parameters", "L", 0)
+            else:
+                value = params[name]
+                if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                        or not math.isfinite(value) or value <= 0:
+                    raise self._load_error("parameters", f"{name} debe ser un número positivo (llegó {value!r})")
+                values[name] = value
+
+        if "zones" in data:
+            zones = []
+            for i, raw in enumerate(self._load_list(data, "zones")):
+                where = f"zones[{i}]"
+                self._load_require(raw, ("name", "x_min", "x_max", "y_min", "y_max", "is_populated"), where)
+                if not isinstance(raw["name"], str):
+                    raise self._load_error(where, "name debe ser texto")
+                if not isinstance(raw["is_populated"], bool):
+                    raise self._load_error(where, "is_populated debe ser true o false")
+                for coord in ("x_min", "x_max", "y_min", "y_max"):
+                    self._load_number(raw[coord], where, coord, 0.0, 1000.0)
+                try:
+                    zone = Zone(raw["name"], raw["x_min"], raw["x_max"], raw["y_min"], raw["y_max"], raw["is_populated"])
+                except (ValueError, TypeError) as error:
+                    raise self._load_error(where, str(error)) from None
+                if any(existing.name == zone.name for existing in zones):
+                    raise self._load_error(where, f"nombre de zona repetido: {zone.name!r}")
+                zones.append(zone)
+        else:
+            zones = list(self.zones)
+            inherited.append("zones")
+
+        if "stations" in data:
+            stations = {}
+            for i, raw in enumerate(self._load_list(data, "stations")):
+                where = f"stations[{i}]"
+                self._load_require(raw, ("station_id", "x", "y"), where)
+                station_id = self._load_station_id(raw["station_id"], where, "station_id")
+                x = self._load_number(raw["x"], where, "x", 0.0, 1000.0)
+                y = self._load_number(raw["y"], where, "y", 0.0, 1000.0)
+                if station_id in stations:
+                    raise self._load_error(where, f"station_id repetido: {station_id!r}")
+                stations[station_id] = Station(station_id, x, y)
+        else:
+            stations = dict(self.stations)
+            inherited.append("stations")
+
+        return {"clock": clock, "params": values, "zones": zones,
+                "stations": stations, "inherited": inherited}
+
+    @staticmethod
+    def _populated(zones: list, x: float, y: float) -> bool:
+        """AUXILIAR: misma regla que epicenter_in_populated_zone, pero con
+        las zonas del ARCHIVO (no las del escenario actual)."""
+        return any(zone.contains(x, y) and zone.is_populated for zone in zones)
+
+    def _build_state_from_insertions(self, data: dict, general: dict) -> tuple[dict, list]:
+        """AUXILIAR: modo 1, carga por inserciones. Valida en el orden
+        acordado (campos, rangos y fechas, ids únicos, estaciones) y
+        construye el estado nuevo en un Scenario TEMPORAL usando
+        create_event, para reutilizar exactamente la misma lógica de alta
+        (zona poblada, prioridad, AVL con balanceo, BST, event_index y
+        asociaciones). self no se toca."""
+        events = self._load_list(data, "events", required=True)
+
+        # 1. Campos obligatorios de todos los eventos.
+        for i, raw in enumerate(events):
+            self._load_require(raw, self._INSERTION_EVENT_FIELDS, f"events[{i}]")
+
+        # 2. Rangos y fechas (no posteriores al reloj).
+        parsed = []
+        for i, raw in enumerate(events):
+            where = f"events[{i}]"
+            values = self._load_event_values(raw, where, general["clock"])
+            values["station_id"] = self._load_station_id(raw["station_id"], where, "station_id")
+            parsed.append(values)
+
+        # 3. Ids únicos (un id duplicado invalida el archivo, sección 12).
+        first_position = {}
+        for i, values in enumerate(parsed):
+            event_id = values["event_id"]
+            if event_id in first_position:
+                raise self._load_error(
+                    f"events[{i}]", f"event_id {event_id} repetido (ya aparece en events[{first_position[event_id]}])"
+                )
+            first_position[event_id] = i
+
+        # 4. La estación de cada evento debe existir.
+        for i, values in enumerate(parsed):
+            if values["station_id"] not in general["stations"]:
+                raise self._load_error(f"events[{i}]", f"la estación {values['station_id']!r} no existe")
+
+        # Construcción: mismo comparador y mismo orden en AVL (con balanceo)
+        # y BST (sin balanceo). Queda en modo NORMAL (sección 12).
+        params = general["params"]
+        temp = Scenario(zones=general["zones"], stations=general["stations"],
+                        simulation_clock=general["clock"], L=params["L"], W=params["W"],
+                        R=params["R"], T=params["T"], mode=Mode.NORMAL)
+        for values in parsed:
+            temp.create_event(
+                event_id=values["event_id"], magnitude=values["magnitude"], depth=values["depth"],
+                x=values["x"], y=values["y"], occurred_at=values["occurred_at"],
+                stations={general["stations"][values["station_id"]]},
+            )
+        return temp._snapshot_full_state(), []
+
+    def _build_state_from_topology(self, data: dict, general: dict) -> tuple[dict, list]:
+        """AUXILIAR: modo 2, carga por topología. Además de lo del modo 1,
+        valida la consistencia de la topología. Corta en el primer error.
+        Construye todo en objetos nuevos; self no se toca."""
+        clock = general["clock"]
+        stations = general["stations"]
+        zones = general["zones"]
+        warnings = []
+
+        avl = data.get("avl")
+        if not isinstance(avl, dict) or "root_id" not in avl or "nodes" not in avl:
+            raise self._load_error("avl", "debe ser un objeto con 'root_id' y 'nodes'")
+        nodes_raw = avl["nodes"]
+        if not isinstance(nodes_raw, list):
+            raise self._load_error("avl.nodes", "debe ser una lista")
+        archived_raw = self._load_list(data, "archived")
+        eliminated_raw = self._load_list(data, "eliminated_ids")
+        queue_raw = self._load_list(data, "report_queue")
+
+        # 1. Campos obligatorios.
+        for i, raw in enumerate(nodes_raw):
+            self._load_require(raw, self._TOPOLOGY_NODE_FIELDS, f"avl.nodes[{i}]")
+        for i, raw in enumerate(archived_raw):
+            self._load_require(raw, self._STORED_EVENT_FIELDS, f"archived[{i}]")
+        for i, raw in enumerate(queue_raw):
+            self._load_require(raw, self._REPORT_FIELDS, f"report_queue[{i}]")
+
+        # 2. Rangos, fechas y datos guardados de cada evento.
+        nodes = []
+        for i, raw in enumerate(nodes_raw):
+            where = f"avl.nodes[{i}]"
+            values = self._load_stored_event(raw, where, clock)
+            values["priority"] = self._load_int(raw["priority"], where, "priority", 1, 3)
+            values["height"] = self._load_int(raw["height"], where, "height", 0)
+            values["balance_factor"] = self._load_int(raw["balance_factor"], where, "balance_factor", -len(nodes_raw), len(nodes_raw))
+            for side in ("left_id", "right_id"):
+                if raw[side] is not None:
+                    self._load_int(raw[side], where, side, 1, 999999)
+                values[side] = raw[side]
+            values["where"] = where
+            values["raw"] = raw
+            nodes.append(values)
+        archived = []
+        for i, raw in enumerate(archived_raw):
+            where = f"archived[{i}]"
+            values = self._load_stored_event(raw, where, clock)
+            if "priority" in raw:
+                values["priority"] = self._load_int(raw["priority"], where, "priority", 1, 3)
+            values["where"] = where
+            values["raw"] = raw
+            archived.append(values)
+        eliminated = [self._load_int(value, f"eliminated_ids[{i}]", "id", 1, 999999)
+                    for i, value in enumerate(eliminated_raw)]
+
+        # 3. Unicidad: un id no puede repetirse ni estar a la vez activo,
+        #    archivado o eliminado.
+        owner = {}
+        for label, items in (("activo", [(v["where"], v["event_id"]) for v in nodes]),
+                            ("archivado", [(v["where"], v["event_id"]) for v in archived]),
+                            ("eliminado", [(f"eliminated_ids[{i}]", e) for i, e in enumerate(eliminated)])):
+            for where, event_id in items:
+                if event_id in owner:
+                    first_where, first_label = owner[event_id]
+                    raise self._load_error(
+                        where, f"el id {event_id} ya aparece en {first_where} ({first_label}); "
+                            f"no puede estar dos veces ni ser {first_label} y {label} a la vez"
+                    )
+                owner[event_id] = (where, label)
+
+        # 4. Las estaciones referenciadas deben existir.
+        for values in nodes + archived:
+            for station_id in values["station_ids"]:
+                if station_id not in stations:
+                    raise self._load_error(values["where"], f"la estación {station_id!r} no existe")
+
+        # 5. Referencias válidas: root_id y cada left_id/right_id apuntan a
+        #    un nodo activo del archivo, o son null.
+        by_id = {v["event_id"]: v for v in nodes}
+        root_id = avl["root_id"]
+        if not nodes:
+            if root_id is not None:
+                raise self._load_error("avl.root_id", "debe ser null si no hay nodos activos")
+        else:
+            if root_id is None or isinstance(root_id, bool) or root_id not in by_id:
+                raise self._load_error("avl.root_id", f"{root_id!r} no es un nodo activo del archivo")
+        for values in nodes:
+            for side in ("left_id", "right_id"):
+                child = values[side]
+                if child is not None and child not in by_id:
+                    raise self._load_error(values["where"], f"{side} = {child} no es un nodo activo del archivo")
+                if child == values["event_id"]:
+                    raise self._load_error(values["where"], f"{side} apunta al propio nodo (ciclo)")
+
+        # 6. Cada nodo en una sola posición: un id no puede ser hijo de dos
+        #    padres (ni dos veces del mismo), y la raíz no puede ser hija.
+        parent_of = {}
+        for values in nodes:
+            for side in ("left_id", "right_id"):
+                child = values[side]
+                if child is None:
+                    continue
+                if child in parent_of:
+                    other_parent, other_side = parent_of[child]
+                    raise self._load_error(
+                        values["where"], f"el id {child} aparece en dos posiciones: {other_side} de "
+                                         f"{other_parent} y {side} de {values['event_id']}"
+                    )
+                parent_of[child] = (values["event_id"], side)
+        if root_id in parent_of:
+            raise self._load_error("avl.root_id", f"la raíz {root_id} aparece como hijo de {parent_of[root_id][0]} (ciclo)")
+
+        # 7. Sin ciclos ni nodos sueltos: todos alcanzables desde la raíz.
+        reached = set()
+        pending = [root_id] if nodes else []
+        while pending:
+            current = pending.pop()
+            if current in reached:
+                raise self._load_error("avl", f"ciclo detectado en el nodo {current}")
+            reached.add(current)
+            for side in ("left_id", "right_id"):
+                if by_id[current][side] is not None:
+                    pending.append(by_id[current][side])
+        unreached = sorted(set(by_id) - reached)
+        if unreached:
+            raise self._load_error(
+                "avl", f"los nodos {unreached} no son alcanzables desde la raíz (forman un ciclo o están desconectados)"
+            )
+
+        # 8. Crear los eventos (objetos nuevos) y verificar que la prioridad
+        #    guardada coincida con la calculada con las zonas del archivo
+        #    (sección 4).
+        def make_event(values):
+            event = Event(
+                event_id=values["event_id"], magnitude=values["magnitude"], depth=values["depth"],
+                x=values["x"], y=values["y"], occurred_at=values["occurred_at"],
+                revision=values["revision"],
+                stations={stations[s] for s in values["station_ids"]},
+                is_in_populated_zone=self._populated(zones, values["x"], values["y"]),
+            )
+            event.attention_status = values["attention_status"]
+            if "priority" in values and values["priority"] != event.priority:
+                raise self._load_error(
+                    values["where"], f"prioridad guardada {values['priority']} no coincide con la calculada "
+                                     f"{event.priority} (sección 4)"
+                )
+            return event
+
+        active_events = {v["event_id"]: make_event(v) for v in nodes}
+        archived_events = {v["event_id"]: make_event(v) for v in archived}
+
+        # 9. Armar la topología EXACTA del archivo (sin reinsertar) con
+        #    AVLTree.restore_topology y revisarla con AVLTree.audit: orden
+        #    global por K contra todos los ancestros (equivale a que el
+        #    inorden salga ordenado), unicidad, punteros parent, alturas
+        #    guardadas contra reales.
+        avl_nodes = {event_id: AVLNode(event, height=by_id[event_id]["height"])
+                     for event_id, event in active_events.items()}
+        links = []
+        for values in nodes:
+            node = avl_nodes[values["event_id"]]
+            left = avl_nodes.get(values["left_id"]) if values["left_id"] is not None else None
+            right = avl_nodes.get(values["right_id"]) if values["right_id"] is not None else None
+            parent_id = parent_of.get(values["event_id"], (None,))[0]
+            parent = avl_nodes[parent_id] if parent_id is not None else None
+            links.append((node, left, right, parent, values["height"]))
+
+        metrics = self._load_metrics(data)
+        tree = AVLTree(metrics=metrics)
+        root_node = avl_nodes[root_id] if nodes else None
+        tree.restore_topology(AVLTopologySnapshot(root_node, len(nodes), links))
+
+        errors = [issue for issue in tree.audit(require_balance=False) if issue["severity"] == "error"]
+        if errors:
+            errors.sort(key=lambda issue: self._AUDIT_ERROR_ORDER.index(issue["type"])
+                        if issue["type"] in self._AUDIT_ERROR_ORDER else len(self._AUDIT_ERROR_ORDER))
+            first = errors[0]
+            where = by_id[first["event_id"]]["where"] if first["event_id"] in by_id else "avl"
+            raise self._load_error(where, f"{first['type']}: {first['detail']}")
+
+        # 10. Factor de balance guardado contra el real (las alturas ya
+        #     se verificaron en el paso 9, así que node.balance_factor es el real).
+        for values in nodes:
+            real = avl_nodes[values["event_id"]].balance_factor
+            if values["balance_factor"] != real:
+                raise self._load_error(
+                    values["where"], f"factor de balance guardado {values['balance_factor']}, real {real}"
+                )
+
+        # 11. Balance y modo. Ordenada y balanceada: se carga (en el modo
+        #     del archivo, o el actual si no lo trae). Ordenada pero
+        #     desbalanceada: solo con el modo estrés ACTIVADO, y se avisa.
+        file_mode = None
+        if "mode" in data:
+            try:
+                file_mode = Mode(data["mode"])
+            except (ValueError, TypeError):
+                raise self._load_error("mode", f"debe ser 'Normal' o 'Stress' (llegó {data['mode']!r})") from None
+        unbalanced = [node.event.event_id for node in tree.unbalanced_nodes()]
+        if unbalanced:
+            if self.mode != Mode.STRESS:
+                raise self._load_error(
+                    "avl", f"la topología está ordenada pero desbalanceada (nodos {unbalanced}); "
+                           f"solo se puede cargar con el modo estrés activado"
+                )
+            if file_mode == Mode.NORMAL:
+                raise self._load_error(
+                    "mode", f"el archivo declara modo Normal pero la topología está desbalanceada (nodos {unbalanced})"
+                )
+            new_mode = Mode.STRESS
+            warnings.append(f"Topología desbalanceada (nodos {unbalanced}): cargada en modo estrés")
+        else:
+            new_mode = file_mode if file_mode is not None else self.mode
+
+        # 12. Cola de reportes, en su orden original.
+        queue = Queue()
+        for i, raw in enumerate(queue_raw):
+            where = f"report_queue[{i}]"
+            values = self._load_event_values(raw, where, clock)
+            revision = self._load_int(raw["revision_num"], where, "revision_num", 1)
+            station_id = self._load_station_id(raw["station_id"], where, "station_id")
+            if station_id not in stations:
+                raise self._load_error(where, f"la estación {station_id!r} no existe")
+            queue.enqueue(Report(values["event_id"], revision, stations[station_id], values["magnitude"],
+                                 values["depth"], values["x"], values["y"], values["occurred_at"]))
+
+        # Construcción final en un Scenario TEMPORAL, para reconstruir las
+        # asociaciones con la misma política determinista de siempre.
+        # El BST se arma insertando en preorden del AVL: así queda con la
+        # misma forma que la topología cargada.
+        bst = BSTTree()
+        for event in tree.preorder():
+            bst.insert(event)
+        params = general["params"]
+        temp = Scenario(
+            metrics=metrics, avl_tree=tree, bst_tree=bst,
+            event_index={event_id: avl_nodes[event_id] for event_id in active_events},
+            stations=stations, zones=zones, eliminated_IDs=set(eliminated),
+            archived_history=archived_events, referenced_by={}, simulation_clock=clock,
+            L=params["L"], W=params["W"], R=params["R"], T=params["T"], mode=new_mode,
+            report_queue=queue,
+        )
+        for event in temp._all_active_and_archived_events():
+            temp._recalculate_reference(event)
+
+        # 13. Si el archivo guardó las referencias, deben coincidir con las
+        #     reconstruidas (los valores derivados se verifican al cargar).
+        for values in nodes + archived:
+            if "reference_id" in values["raw"]:
+                event = temp._find_any_event(values["event_id"])
+                if values["raw"]["reference_id"] != event.reference_id:
+                    raise self._load_error(
+                        values["where"], f"reference_id guardado {values['raw']['reference_id']!r} no coincide "
+                                         f"con el calculado {event.reference_id!r} (sección 7)"
+                    )
+
+        return temp._snapshot_full_state(), warnings
+
+    def _load_metrics(self, data: dict) -> dict:
+        """AUXILIAR: métricas acumuladas del archivo (enteros >= 0). Las de
+        rotación que falten las completa AVLTree en 0."""
+        metrics = data.get("metrics", {})
+        if not isinstance(metrics, dict):
+            raise self._load_error("metrics", "debe ser un objeto")
+        loaded = {}
+        for name, value in metrics.items():
+            if not isinstance(name, str):
+                raise self._load_error("metrics", "los nombres de las métricas deben ser texto")
+            loaded[name] = self._load_int(value, "metrics", name, 0)
+        return loaded
 
 
 
