@@ -2392,7 +2392,7 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
                     other_parent, other_side = parent_of[child]
                     raise self._load_error(
                         values["where"], f"el id {child} aparece en dos posiciones: {other_side} de "
-                                         f"{other_parent} y {side} de {values['event_id']}"
+                                        f"{other_parent} y {side} de {values['event_id']}"
                     )
                 parent_of[child] = (values["event_id"], side)
         if root_id in parent_of:
@@ -2430,7 +2430,7 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
             if "priority" in values and values["priority"] != event.priority:
                 raise self._load_error(
                     values["where"], f"prioridad guardada {values['priority']} no coincide con la calculada "
-                                     f"{event.priority} (sección 4)"
+                                    f"{event.priority} (sección 4)"
                 )
             return event
 
@@ -2443,7 +2443,7 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
         #    inorden salga ordenado), unicidad, punteros parent, alturas
         #    guardadas contra reales.
         avl_nodes = {event_id: AVLNode(event, height=by_id[event_id]["height"])
-                     for event_id, event in active_events.items()}
+                    for event_id, event in active_events.items()}
         links = []
         for values in nodes:
             node = avl_nodes[values["event_id"]]
@@ -2489,7 +2489,7 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
             if self.mode != Mode.STRESS:
                 raise self._load_error(
                     "avl", f"la topología está ordenada pero desbalanceada (nodos {unbalanced}); "
-                           f"solo se puede cargar con el modo estrés activado"
+                        f"solo se puede cargar con el modo estrés activado"
                 )
             if file_mode == Mode.NORMAL:
                 raise self._load_error(
@@ -2510,7 +2510,7 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
             if station_id not in stations:
                 raise self._load_error(where, f"la estación {station_id!r} no existe")
             queue.enqueue(Report(values["event_id"], revision, stations[station_id], values["magnitude"],
-                                 values["depth"], values["x"], values["y"], values["occurred_at"]))
+                                values["depth"], values["x"], values["y"], values["occurred_at"]))
 
         # Construcción final en un Scenario TEMPORAL, para reconstruir las
         # asociaciones con la misma política determinista de siempre.
@@ -2539,7 +2539,7 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
                 if values["raw"]["reference_id"] != event.reference_id:
                     raise self._load_error(
                         values["where"], f"reference_id guardado {values['raw']['reference_id']!r} no coincide "
-                                         f"con el calculado {event.reference_id!r} (sección 7)"
+                                        f"con el calculado {event.reference_id!r} (sección 7)"
                     )
 
         return temp._snapshot_full_state(), warnings
