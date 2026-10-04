@@ -1,7 +1,16 @@
 import axios from "axios";
-import { Mode } from "../models/mode";
+import { BalanceRecovery } from "../models/Mode/BalanceRecovery";
+import { Mode } from "../models/Mode/Mode";
+import { StructureAudit } from "../models/Mode/StructureAudit";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/mode`;
+
+export const MODE_STATE_UPDATED_EVENT = "sismolab:mode-state-updated";
+
+export interface ModeStateUpdateEvent {
+    stressMode: boolean;
+    isAvlBalanced: boolean;
+}
 
 class ModeService {
     async getMode(): Promise<boolean> {
@@ -31,6 +40,25 @@ class ModeService {
             console.error("Error al actualizar el modo:", error);
             throw error;
         }
+    }
+
+    async getStructureAudit(): Promise<StructureAudit> {
+        const response = await axios.get<StructureAudit>(`${API_URL}/structure`);
+        return response.data;
+    }
+
+    async recoverBalance(): Promise<BalanceRecovery> {
+        const response = await axios.post<BalanceRecovery>(`${API_URL}/recover-balance`);
+        const result = response.data;
+        if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent<ModeStateUpdateEvent>(MODE_STATE_UPDATED_EVENT, {
+                detail: {
+                    stressMode: result.mode === "Stress",
+                    isAvlBalanced: result.audit.is_valid && result.audit.is_avl,
+                },
+            }));
+        }
+        return result;
     }
 }
 

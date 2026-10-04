@@ -1,7 +1,8 @@
-import { Event } from '../../models/event';
-import EventFormValidator from '../../components/events/EventFormValidator';
+import ReportFormValidator from '../../components/reports/ReportFormValidator';
+import { ReportFormValues } from '../../models/Report/ReportFormValues';
 import { Station } from '../../models/Station';
 import { stationService } from '../../services/stationService';
+import { eventService } from '../../services/eventService';
 import Swal from 'sweetalert2';
 import Breadcrumb from '../../components/Breadcrumb';
 import { useNavigate } from "react-router-dom";
@@ -29,10 +30,18 @@ const CreateEvent = () => {
         }
     };
     // Creation logic
-    const handleCreateEvent = async (event: Event) => {
+    const handleCreateEvent = async (values: ReportFormValues) => {
 
         try {
-            const createdEvent = await eventService.createReport(event);
+            const createdEvent = await eventService.createEvent({
+                event_id: values.event_id,
+                station_id: values.station_id,
+                magnitude: values.magnitude,
+                depth: values.depth,
+                x: values.x,
+                y: values.y,
+                ...(values.ocurred_at ? { occurred_at: values.ocurred_at } : {}),
+            });
             if (createdEvent) {
                 Swal.fire({
                     title: "Completado",
@@ -40,8 +49,7 @@ const CreateEvent = () => {
                     icon: "success",
                     timer: 3000
                 })
-                console.log("Evento creado con éxito: ", createdEvent );
-                navigate("/reportes/cola");
+                navigate("/eventos/arboles");
             } else {
                 Swal.fire({
                     title: "Error",
@@ -61,10 +69,9 @@ const CreateEvent = () => {
     };
     return (
         <div>
-            {/* Form for report creation */}
             <h2>Crear evento</h2>
-            <Breadcrumb pageName="Crear reporte" />
-            <EventFormValidator
+            <Breadcrumb pageName="Crear evento" />
+            <ReportFormValidator
                 handleAction={handleCreateEvent}
                 mode={1} // 1 stands for creation
                 stations= {stations}

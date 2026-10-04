@@ -1,6 +1,7 @@
 import { Formik, Form, Field, ErrorMessage } from "formik";
 import * as Yup from "yup";
-import { Event } from "../../models/event";
+import { Event } from "../../models/Event/Event";
+import { EventApiResponse } from "../../models/Event/EventApiResponse";
 import { Station } from "../../models/Station";
 import { useNavigate } from "react-router-dom";
 import { clockService } from "../../services/clockService";
@@ -8,14 +9,59 @@ import { formatLocalDateTime } from "../../utils/utils";
 import { parseLocalDateTime } from "../../utils/utils";
 
 interface MyFormProps {
-    mode: number; // 1 (create) or 2 (update)
-    handleAction: (values: Event) => void;
-    event?: Event | null;
+    mode: number; // 1 (create), 2 (update), or 3 (view/review)
+    handleAction: (values: Event | EventApiResponse) => void;
+    event?: Event | EventApiResponse | null;
     stations: Station[];
 }
 
 const EventFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, event, stations }) => {
     const navigate = useNavigate();
+    const eventOccurredAt = event
+        ? ("occurred_at" in event ? event.occurred_at : event.ocurred_at)
+        : undefined;
+
+    if (mode === 3 && event) {
+        const details = event as EventApiResponse;
+        return (
+            <section className="rounded-md border border-stroke bg-white p-6 shadow-sm">
+                <div className="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-stroke pb-5">
+                    <div>
+                        <p className="text-sm font-medium uppercase text-meta-5">Evento</p>
+                        <h2 className="mt-1 text-2xl font-semibold text-black">SIS-{details.event_id}</h2>
+                    </div>
+                    <span className={`rounded-sm px-3 py-1 text-sm font-medium ${details.attention_status === "reviewed" ? "bg-meta-3/10 text-meta-3" : "bg-warning/10 text-warning"}`}>
+                        {details.attention_status === "reviewed" ? "Revisado" : "Pendiente"}
+                    </span>
+                </div>
+
+                <dl className="grid grid-cols-1 gap-x-8 gap-y-5 sm:grid-cols-2 xl:grid-cols-3">
+                    <div><dt className="text-sm text-gray-500">Magnitud</dt><dd className="mt-1 font-medium text-black">{details.magnitude.toFixed(1)}</dd></div>
+                    <div><dt className="text-sm text-gray-500">Profundidad</dt><dd className="mt-1 font-medium text-black">{details.depth.toFixed(1)} km</dd></div>
+                    <div><dt className="text-sm text-gray-500">Prioridad</dt><dd className="mt-1 font-medium text-black">{details.priority}</dd></div>
+                    <div><dt className="text-sm text-gray-500">Epicentro</dt><dd className="mt-1 font-medium text-black">({details.x.toFixed(1)}, {details.y.toFixed(1)})</dd></div>
+                    <div><dt className="text-sm text-gray-500">Fecha</dt><dd className="mt-1 font-medium text-black">{new Date(details.occurred_at).toLocaleString()}</dd></div>
+                    <div><dt className="text-sm text-gray-500">Revisión</dt><dd className="mt-1 font-medium text-black">{details.revision}</dd></div>
+                    <div><dt className="text-sm text-gray-500">Estaciones</dt><dd className="mt-1 font-medium text-black">{details.stations.map((station) => `Estación ${station}`).join(", ")}</dd></div>
+                    <div><dt className="text-sm text-gray-500">Zona poblada</dt><dd className="mt-1 font-medium text-black">{details.is_in_populated_zone ? "Sí" : "No"}</dd></div>
+                </dl>
+
+                <div className="mt-8 flex justify-end gap-3 border-t border-stroke pt-5">
+                    <button type="button" onClick={() => navigate(-1)} className="rounded-sm border border-stroke px-4 py-2 font-medium text-black hover:bg-gray-2">
+                        Volver
+                    </button>
+                    <button
+                        type="button"
+                        disabled={details.attention_status === "reviewed"}
+                        onClick={() => handleAction(details)}
+                        className="rounded-sm bg-meta-3 px-4 py-2 font-medium text-white hover:bg-opacity-90 disabled:cursor-not-allowed disabled:bg-gray-400"
+                    >
+                        {details.attention_status === "reviewed" ? "Ya revisado" : "Marcar revisado"}
+                    </button>
+                </div>
+            </section>
+        );
+    }
 
     return (
 
@@ -29,8 +75,8 @@ const EventFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, event, 
                     depth: event.depth || "",
                     x: event.x || "",
                     y: event.y || "",
-                    ocurred_at: event.ocurred_at
-                        ? formatLocalDateTime(event.ocurred_at)
+                    ocurred_at: eventOccurredAt
+                        ? formatLocalDateTime(new Date(eventOccurredAt))
                         : "",
                     revision: event.revision || "",
                     attention_status: event.attention_status || "pending",

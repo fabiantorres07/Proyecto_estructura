@@ -183,6 +183,22 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
               </SidebarLinkGroup>
               <li>
                 <NavLink
+                  to="/eventos/arboles"
+                  className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
+                    pathname.includes('eventos') && 'bg-graydark dark:bg-meta-4'
+                  }`}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 7v5m0 0-5 5m5-5 5 5" />
+                    <circle cx="12" cy="5" r="2" />
+                    <circle cx="7" cy="19" r="2" />
+                    <circle cx="17" cy="19" r="2" />
+                  </svg>
+                  Eventos
+                </NavLink>
+              </li>
+              <li>
+                <NavLink
                   to="/reportes/cola"
                   className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
                     pathname.includes('reportes') &&

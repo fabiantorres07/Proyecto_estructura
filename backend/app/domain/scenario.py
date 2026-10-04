@@ -79,6 +79,11 @@ class Scenario:
         if not isinstance(mode, Mode):
             raise ValueError("Mode must either be Stress or Normal")
 
+        if mode == Mode.NORMAL:
+            audit = self.verify_structure()
+            if not audit["is_valid"] or not audit["is_avl"]:
+                raise ValueError("The AVL tree must be valid and balanced before leaving Stress mode")
+
         self.mode = mode
         return self.mode
     

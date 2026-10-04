@@ -3,7 +3,7 @@ import { Stage, Layer, Line, Text, Circle, Group, Label, Tag } from "react-konva
 import MapZone from "./MapZone";
 import MapStation from "./MapStation";
 import { Station } from "../../models/Station";
-import { Event as MapEventData } from "../../models/event";
+import { Event as MapEventData } from "../../models/Event/Event";
 import { Zone } from "../../models/Zone";
 
 const GRID_SIZE = 10;

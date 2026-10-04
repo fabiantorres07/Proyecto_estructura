@@ -1,4 +1,4 @@
-export interface Event{
+export interface Event {
     event_id?: string;
     magnitude?: number;
     depth?: number;

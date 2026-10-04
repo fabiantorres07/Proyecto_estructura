@@ -3,7 +3,11 @@ import { Download, Upload, Undo2 } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { clockService } from '../services/clockService';
 import { getApiErrorMessage } from '../utils/utils';
-import { modeService } from '../services/modeService';
+import {
+  MODE_STATE_UPDATED_EVENT,
+  ModeStateUpdateEvent,
+  modeService,
+} from '../services/modeService';
 
 const toLocalDateTime = (date: Date) =>
   new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
@@ -20,6 +24,7 @@ const Header = (props: {
   const [stressMode, setStressMode] = useState(false);
   const [isModeLoading, setIsModeLoading] = useState(true);
   const [isModeUpdating, setIsModeUpdating] = useState(false);
+  const [isAvlBalanced, setIsAvlBalanced] = useState(true);
 
   useEffect(() => {
     const loadClock = async () => {
@@ -41,9 +46,26 @@ const Header = (props: {
   }, []);
 
   useEffect(() => {
+    const syncModeState = (event: Event) => {
+      const { stressMode: nextStressMode, isAvlBalanced: nextIsAvlBalanced } =
+        (event as CustomEvent<ModeStateUpdateEvent>).detail;
+      setStressMode(nextStressMode);
+      setIsAvlBalanced(nextIsAvlBalanced);
+    };
+
+    window.addEventListener(MODE_STATE_UPDATED_EVENT, syncModeState);
+    return () => window.removeEventListener(MODE_STATE_UPDATED_EVENT, syncModeState);
+  }, []);
+
+  useEffect(() => {
     const loadMode = async () => {
       try {
-        setStressMode(await modeService.getMode());
+        const [loadedMode, audit] = await Promise.all([
+          modeService.getMode(),
+          modeService.getStructureAudit(),
+        ]);
+        setStressMode(loadedMode);
+        setIsAvlBalanced(audit.is_valid && audit.is_avl);
       } catch (error) {
         await Swal.fire({
           title: 'Error',
@@ -99,10 +121,24 @@ const Header = (props: {
     }
   };
 
-  const handleStressModeChange = async(value: boolean) => {
+  const handleStressModeChange = async (value: boolean) => {
     setIsModeUpdating(true);
     try {
-      await modeService.updateMode(value)
+      if (stressMode && !value) {
+        const audit = await modeService.getStructureAudit();
+        const balanced = audit.is_valid && audit.is_avl;
+        setIsAvlBalanced(balanced);
+        if (!balanced) {
+          await Swal.fire({
+            title: 'AVL desbalanceado',
+            text: 'Recupera el balance del árbol antes de desactivar el modo estrés.',
+            icon: 'warning',
+          });
+          return;
+        }
+      }
+
+      await modeService.updateMode(value);
       setStressMode(value);
     } catch (error) {
       await Swal.fire({
@@ -204,7 +240,7 @@ const Header = (props: {
             type="button"
             role="switch"
             aria-checked={stressMode}
-            disabled={isModeLoading || isModeUpdating}
+            disabled={isModeLoading || isModeUpdating || (stressMode && !isAvlBalanced)}
             onClick={() => void handleStressModeChange(!stressMode)}
             className="inline-flex items-center gap-2 rounded px-2 py-2 text-sm font-medium text-body disabled:cursor-wait disabled:opacity-60 dark:text-bodydark"
           >

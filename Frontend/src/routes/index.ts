@@ -20,6 +20,8 @@ const ReportQueue = lazy(()=>import('../pages/Reports/Queue'));
 const StationsDashboard = lazy(()=>import('../pages/Station/StationsDashboard'));
 const ZonesDashboard = lazy(()=> import('../pages/Zones/ZonesDashboard'));
 const CreateEvent = lazy(() => import ('../pages/Events/Create'));
+const EventTrees = lazy(() => import('../pages/Events/Trees'));
+const EventDetail = lazy(() => import('../pages/Events/Detail'));
 
 const coreRoutes = [
   {
@@ -117,6 +119,16 @@ const coreRoutes = [
     path: '/zonas/dashboard',
     title: 'Panel de zonas',
     component: ZonesDashboard,
+  },
+  {
+    path: '/eventos/arboles',
+    title: 'Árboles de eventos',
+    component: EventTrees,
+  },
+  {
+    path: '/eventos/:eventId',
+    title: 'Detalle del evento',
+    component: EventDetail,
   },
   {
     path: '/eventos/crear',
