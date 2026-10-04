@@ -7,10 +7,16 @@ from app.domain.zone import Zone
 from app.domain.station import Station
 from app.domain.report import Report
 from app.domain.mode import Mode
-from app.structures.avl_node import AVLNode
+
+from app.domain.event import Event, AttentionStatus
+
 from app.structures.stack import Stack
 from app.structures.queue import Queue 
-from app.domain.action import CreationAction, CorrectionAction, AttentionChangeAction, DeletionAction,ParameterChangeAction, ClockAdvanceAction, QueueStepAction
+from app.domain.action import (
+    CreationAction, CorrectionAction, AttentionChangeAction, DeletionAction,
+    ParameterChangeAction, ClockAdvanceAction, QueueStepAction, MassArchiveAction,
+    GlobalRecoveryAction, LoadAction, ReactivationAction,
+)
 from app.structures.avl_tree import AVLTree, ROTATION_METRIC_KEYS
 from app.structures.avl_node import AVLNode
 from app.structures.bst_node import BSTNode
@@ -25,17 +31,18 @@ class Scenario:
                  eliminated_IDs: Optional[set[int]] = None, archived_history: Optional[dict[int, Event]] = None, referenced_by=None, simulation_clock: Optional[datetime] = None, 
                 L: int=3, W: float = 48.0, R: float = 40.0, T: float = 72.0, mode: Mode = Mode.NORMAL, undo_stack: Optional[Stack] = None, report_queue: Optional[Queue] = None):
 
-        #Colecciones de eliminación e histórico
+        # Collections for elimination and history.
         self.eliminated_IDs = eliminated_IDs if eliminated_IDs is not None else set()
         self.archived_history = archived_history if archived_history is not None else dict()
 
-        #Reloj de Simulación precisión en segundos, Si no se provee uno, toma la hora UTC actual del sistema
+        # Simulation clock, second precision. If none is provided, use the
+        # current system UTC time.
         self._simulation_clock: datetime = simulation_clock or datetime.now(timezone.utc).replace(microsecond=0)
         # Store a fixed baseline and measure elapsed time monotonically so wall-clock adjustments do not stop or reverse the simulation clock.
         self._clock_anchor_monotonic = monotonic()
 
-        #Parámetros globales configurables
-        self.L= L #Limite inicialmente 3
+        # Configurable global parameters.
+        self.L = L  # Depth limit, initially 3
 
         self.W= W
         self.R= R
@@ -47,7 +54,9 @@ class Scenario:
         self.event_index = event_index if event_index is not None else dict()
         self.metrics = metrics if metrics is not None else dict()
 
-        self.avl_tree = avl_tree if avl_tree is not None else AVLTree(metrics=self.metrics) #AVLTree necesita recibir self.metrics ya creado (para compartir el mismo diccionario)
+        # AVLTree must receive self.metrics after it is created, so both
+        # share the same metrics dictionary (single source of truth).
+        self.avl_tree = avl_tree if avl_tree is not None else AVLTree(metrics=self.metrics)
         self.bst_tree = bst_tree if bst_tree is not None else BSTTree()
 
         self.undo_stack = undo_stack if undo_stack is not None else Stack()
@@ -92,46 +101,45 @@ class Scenario:
     def update_simulation_clock(self, new_clock: datetime) -> datetime:
         new_clock = self._as_utc(new_clock)
 
-        # No se puede retroceder el reloj.
+        # The clock cannot move backwards.
         if new_clock < self.simulation_clock:
             raise ValueError("Cannot move the simulation clock backwards")
 
-        if new_clock == self.simulation_clock: #para no apilar una acción que no cambió nada
+        # If nothing changed, do not push an action that would do nothing.
+        if new_clock == self.simulation_clock:
             return self.simulation_clock
-        
-        # Validaciones existentes: ningún evento, archivado ni reporte
-        # puede quedar con fecha posterior al nuevo reloj.
+
+        # Validations: no event, archived event, or report may end up
+        # with a timestamp later than the new clock.
         for node in self.event_index.values():
             if self._as_utc(node.event.occurred_at) > new_clock:
                 raise ValueError(
                     f"Cannot set the clock before event {node.event.event_id}"
                 )
-            
+
         for event in self.archived_history.values():
             if self._as_utc(event.occurred_at) > new_clock:
                 raise ValueError(
                     f"Cannot set the clock before event {event.event_id}"
                 )
-            
+
         for report in self.report_queue.items():
             if self._as_utc(report.occurred_at) > new_clock:
                 raise ValueError(
                     f"Cannot set the clock before report {report.event_id}"
                 )
 
-        # Guardar el reloj simulado actual (con el tiempo real transcurrido
-        # incluido) antes de cambiarlo, para poder volver exactamente a este
-        # instante al deshacer.
+        # Save the current simulation clock (including the elapsed real
+        # time) BEFORE changing it, so undo can return to this exact instant.
         old_clock = self.simulation_clock
 
-        # Aplicar el nuevo reloj.
+        # Apply the new clock.
         self.simulation_clock = new_clock
 
-        # Apilar la acción con el valor viejo.
+        # Push the action with the old value.
         self.undo_stack.push(ClockAdvanceAction(old_clock))
 
         return self.simulation_clock
-
     """==============================================="""
     """================ZONE METHODS==================="""
     """==============================================="""
@@ -911,23 +919,16 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
         ──────────────────────────────────────────────────────────────
 
         Un paso de la cola es UNA sola acción para el usuario, pero por
-        dentro puede disparar otra operación (crear o corregir un evento).
-        create_event y correct_event apilan su propia acción al terminar
-        (CreationAction o CorrectionAction). Si process_next_report además
-        apila una QueueStepAction, quedan DOS acciones en la pila por un
-        solo paso, y el usuario tendría que pulsar "deshacer" dos veces.
+        dentro puede disparar otra operación (crear, corregir o reactivar un
+        evento). create_event, correct_event y archived_reactivation apilan
+        su propia acción al terminar. Si process_next_report además apila
+        una QueueStepAction, quedan DOS acciones en la pila por un solo
+        paso, y el usuario tendría que pulsar "deshacer" dos veces.
 
-        La solución es sacar con pop la acción interna que create_event o
-        correct_event acaban de apilar, y meterla DENTRO de la
-        QueueStepAction. Así la pila solo ve una acción por paso, pero esa
-        acción lleva adentro todo lo necesario para revertir la operación
-        interna.
-
-        Analogía: en la pila de recibos, en vez de meter dos sobres
-        separados ("creé el evento 7" y "procesé un reporte"), se mete UN
-        solo sobre grande que por dentro contiene el sobre chico ("creé el
-        evento 7"). Al deshacer, se abre el grande y se revierte todo de
-        una sola operación.
+        La solución es sacar con pop la acción interna que acaban de apilar,
+        y meterla DENTRO de la QueueStepAction. Así la pila solo ve una
+        acción por paso, pero esa acción lleva adentro todo lo necesario
+        para revertir la operación interna.
         """
 
         # 1. Cola vacía → no hay nada que procesar.
@@ -975,10 +976,21 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
                 # sale de archived_history y vuelve al AVL con los datos
                 # corregidos (sección 6).
                 case = "reactivated"
-                self.archived_reactivation(report)
-                # archived_reactivation NO apila acción interna (ver su docstring).
-                # Al deshacer este paso habrá que revertir la reactivación a mano;
-                # pendiente para undo().
+                event = self.archived_reactivation(report)
+
+                # archived_reactivation ya apiló su propia ReactivationAction.
+                # La sacamos para meterla dentro del QueueStepAction, mismo
+                # patrón que "created" y "corrected": un paso de la cola = una
+                # sola acción en la pila.
+                inner_action = self.undo_stack.pop()
+
+                # Añadir la estación del reporte si aún no estaba. Va AQUÍ y no
+                # dentro de archived_reactivation, por la misma razón que en
+                # "corrected": así podemos comparar antes/después y saber si la
+                # estación era nueva, para poder quitarla al deshacer.
+                if report.station not in event.stations:
+                    event.stations.add(report.station)
+                    confirmed_station_id = report.station.station_id
             elif report.revision_num == archived_event.revision:
                 # Confirmación o conflicto sobre un archivado: no lo reactiva.
                 case = "archived_not_reactivated"
@@ -1053,6 +1065,650 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
             "report": report,
         }
 
+    def preview_branch_archive(self) -> dict:
+        """Vista previa del archivo masivo: dice QUÉ subárbol se archivaría
+        si el usuario confirma. NO modifica nada.
+
+        Corresponde al paso de la sección 10:
+        "Antes de ejecutar, se muestran los identificadores afectados, su
+        cantidad y la justificación de la selección."
+
+        El frontend llama a este método para mostrar un diálogo de confirmación.
+        Si el usuario acepta, llama a branch_archive(winner_root_id) para
+        ejecutar de verdad.
+
+        Devuelve un dict:
+        - Si no hay ramas elegibles:
+            {"eligible": False, "reason": "..."}
+        - Si hay una ganadora:
+            {
+                "eligible": True,
+                "root_id": id de la raíz del subárbol ganador,
+                "size": cantidad de nodos del ganador,
+                "depth": profundidad de la raíz del ganador,
+                "event_ids": lista con los ids de todos los eventos
+                            que se archivarían,
+            }
+
+        Qué NO hace (importante)
+        No desprende nada del árbol. El subárbol sigue donde está.
+
+        No mueve eventos a archived_history. Todos siguen activos.
+
+        No saca nada de event_index.
+
+        No toca reference_id ni referenced_by.
+
+        No apila acciones. No hay nada que deshacer porque no se cambió nada.
+        """
+        # 1. Pedirle al AVL todos los subárboles elegibles.
+        # Un subárbol es elegible si todos sus eventos tienen prioridad baja
+        # y antigüedad mayor a T horas (sección 10).
+        eligible = self.avl_tree.eligible_archive_subtrees(self.simulation_clock, self.T)
+
+        # 2. Sin elegibles: informar y no tocar nada.
+        if not eligible:
+            return {"eligible": False, "reason": "No eligible branch found"}
+
+        # 3. Elegir el ganador según los criterios de la sección 10:
+        #    - mayor cantidad de nodos
+        #    - si empatan, mayor profundidad de la raíz
+        #    - si siguen empatados, mayor id de la raíz
+        # max() con una tupla compara primero por el primer elemento, luego por
+        # el segundo, luego por el tercero. Es exactamente el orden del criterio.
+        winner = max(
+            eligible,
+            key=lambda e: (e["size"], e["depth"], e["root_id"]),
+        )
+
+        # 4. Fijar la lista de ids del subárbol ganador. Es lo que se mostrará
+        # al usuario y lo que se usará al ejecutar (el conjunto se fija antes
+        # de tocar el árbol, para que rotaciones no cambien la lista).
+        event_ids = self.avl_tree.subtree_event_ids(winner["root"])
+
+        # 5. Devolver info para el frontend.
+        return {
+            "eligible": True,
+            "root_id": winner["root_id"],
+            "size": winner["size"],
+            "depth": winner["depth"],
+            "event_ids": event_ids,
+        }
+
+    def branch_archive(self, winner_root_id: int) -> dict:
+        """Ejecuta el archivo masivo del subárbol elegible cuya raíz tiene
+        id `winner_root_id` (sección 10).
+
+        Revalida el ganador: entre el preview y este llamado el árbol pudo
+        cambiar, así que recalcula elegibles y confirma que el id sigue
+        siendo elegible. Si ya no lo es, informa y conserva el estado.
+
+        Pasos:
+        1. Revalidar: recalcular elegibles y buscar el ganador con ese id.
+        2. Fijar event_ids ANTES de tocar el árbol (sección 10: 'el conjunto
+            corresponde a la topología existente al iniciar la operación y
+            se mantiene fijo durante su ejecución').
+        3. Desprender el subárbol con detach_subtree.
+        4. Capturar rotation_delta de las rotaciones que produjo detach.
+        5. Mover los eventos al histórico y sacarlos de event_index.
+            NO se tocan reference_id ni referenced_by: los archivados siguen
+            contando para asociaciones (secciones 7 y 10).
+        6. Apilar MassArchiveAction para deshacer todo como una sola acción.
+        """
+        # 1. Revalidar.
+        eligible = self.avl_tree.eligible_archive_subtrees(self.simulation_clock, self.T)
+        matches = [e for e in eligible if e["root_id"] == winner_root_id]
+
+        if not matches:
+            return {
+                "archived": False,
+                "reason": f"Subtree with root id {winner_root_id} is not eligible anymore",
+            }
+
+        winner = matches[0]
+        node = winner["root"]
+
+        # 2. Fijar ids ANTES de tocar el árbol.
+        event_ids = self.avl_tree.subtree_event_ids(node)
+
+        # 3. Desprender. En modo normal se rota; en estrés, no.
+        balance = (self.mode == Mode.NORMAL)
+        archived_root, former_parent, was_left_child = self.avl_tree.detach_subtree(
+            node, balance=balance
+        )
+
+        # 4. Capturar el delta de métricas de rotación que dejó el detach.
+        rotation_delta = self.avl_tree.last_rotation_delta()
+
+        # 5. Mover los eventos al histórico y sacarlos del índice activo.
+        events = self.avl_tree.subtree_events(archived_root)
+        for event in events:
+            self.archived_history[event.event_id] = event
+            del self.event_index[event.event_id]
+        # OJO: no se toca reference_id ni referenced_by (asociaciones).
+
+        # 6. Apilar la acción (una sola para todo el archivo).
+        self.undo_stack.push(MassArchiveAction(
+            archived_root=archived_root,
+            former_parent=former_parent,
+            was_left_child=was_left_child,
+            event_ids=event_ids,
+            rotation_delta=rotation_delta,
+        ))
+
+        return {
+            "archived": True,
+            "root_id": winner_root_id,
+            "size": winner["size"],
+            "depth": winner["depth"],
+            "event_ids": event_ids,
+        }
+
+    def archived_reactivation(self, report: Report) -> Event:
+        """Reactiva un evento archivado cuando llega un reporte con revisión
+        mayor que la vigente (sección 6: "Un evento archivado conserva su
+        identidad. Una revisión mayor y válida lo reactiva como pendiente en
+        el AVL con sus datos corregidos").
+
+        Es como un correct_event, pero partiendo de un evento que ya no está
+        en el árbol: hay que insertarlo desde cero, no reubicarlo. Por eso usa
+        apply_correction() igual que correct_event, pero el "antes" de este
+        evento es estar en archived_history, no en el AVL.
+
+        Pasos:
+        1. Guardar foto de los valores viejos (para poder deshacer).
+        2. Sacar el evento de archived_history.
+        3. Recalcular zona poblada con el epicentro del reporte.
+        4. Aplicar corrección con los datos del reporte y la revisión del reporte.
+        5. Insertar en AVL y BST, agregar a event_index.
+        6. Recalcular referencias (propia + afectados).
+        7. Apilar ReactivationAction para poder deshacer esta reactivación.
+        8. Devolver el evento reactivado.
+
+        OJO: a propósito NO se añade aquí la estación del reporte. Esa parte
+        se dejó para que la haga process_next_report, igual que ya hace con
+        el caso "corrected": así quien llama puede comparar antes/después y
+        saber si la estación era nueva, para registrar confirmed_station_id
+        en el QueueStepAction y poder quitarla al deshacer el paso completo.
+
+        A diferencia de la versión anterior, esta función SÍ apila su propia
+        acción (ReactivationAction): process_next_report la saca de la pila
+        con pop(), igual que ya hace con CreationAction y CorrectionAction,
+        para meterla dentro del QueueStepAction del paso.
+        """
+        event_id = report.event_id
+        event = self.archived_history[event_id]
+
+        # 1. Foto de valores viejos.
+        old_magnitude = event.magnitude
+        old_depth = event.depth
+        old_x = event.x
+        old_y = event.y
+        old_occurred_at = event.occurred_at
+        old_is_in_populated_zone = event.is_in_populated_zone
+        old_revision = event.revision
+        old_attention_status = event.attention_status
+
+        # 2. Sacar del histórico (ya no está archivado).
+        del self.archived_history[event_id]
+
+        # 3. Recalcular zona poblada con el epicentro del reporte.
+        is_populated = self.epicenter_in_populated_zone(report.x, report.y)
+
+        # 4. Aplicar la corrección. El evento NO estaba en el árbol, así que
+        # el (old_key, new_key) que devuelve apply_correction no se necesita
+        # aquí (eso es para reubicar, y la inserción de abajo es desde cero).
+        event.apply_correction(
+            magnitude=report.magnitude,
+            depth=report.depth,
+            x=report.x,
+            y=report.y,
+            occurred_at=report.occurred_at,
+            revision=report.revision_num,
+            is_in_populated_zone=is_populated,
+        )
+
+        # 5. Insertar en AVL y BST (alta, no reubicación).
+        balance = (self.mode == Mode.NORMAL)
+        node = self.avl_tree.insert(event, balance=balance)
+        self.bst_tree.insert(event)
+        self.event_index[event_id] = node
+
+        # 6. Recalcular referencias. Mismo esquema que correct_event:
+        # Grupo 1 (podrían tenerlo como candidato nuevo, con rango viejo-nuevo)
+        # + Grupo 2 (ya lo tenían como referencia).
+        min_occurred = min(old_occurred_at, event.occurred_at)
+        max_magnitude = max(old_magnitude, event.magnitude)
+
+        affected_group_1 = [
+            other for other in self._all_active_and_archived_events()
+            if other.event_id != event_id
+            and other.occurred_at > min_occurred
+            and other.magnitude < max_magnitude
+        ]
+
+        group_2_ids = self.referenced_by.get(event_id, set())
+        affected_group_2 = [self._find_any_event(other_id) for other_id in group_2_ids]
+
+        affected_others = {
+            other.event_id: other
+            for other in affected_group_1 + affected_group_2
+        }.values()
+
+        # Foto de referencias viejas, ANTES de recalcular (mismo patrón que
+        # correct_event/delete_event: el propio evento + todos los afectados).
+        old_references = {event_id: event.reference_id}
+        for other in affected_others:
+            old_references[other.event_id] = other.reference_id
+
+        self._recalculate_reference(event)
+        for other in affected_others:
+            self._recalculate_reference(other)
+
+        # 7. Apilar la acción. Es lo que faltaba: antes estos datos morían aquí.
+        self.undo_stack.push(ReactivationAction(
+            event_id=event_id,
+            old_magnitude=old_magnitude,
+            old_depth=old_depth,
+            old_x=old_x,
+            old_y=old_y,
+            old_occurred_at=old_occurred_at,
+            old_is_in_populated_zone=old_is_in_populated_zone,
+            old_revision=old_revision,
+            old_attention_status=old_attention_status,
+            old_references=old_references,
+        ))
+
+        # 8. Devolver el evento reactivado.
+        return event
+
+    def _undo_creation(self, action: CreationAction) -> dict:
+        """Deshace una creación: saca el evento de las estructuras activas
+        y restaura las referencias que la creación había cambiado.
+
+        En old_references puede venir una entrada para el propio evento
+        creado (con None). Se ignora, porque el evento ya no existe y
+        _find_any_event fallaría. Solo se restauran los OTROS.
+        """
+        event_id = action.event_id
+        node = self.event_index[event_id]
+        event = node.event
+
+        balance = (self.mode == Mode.NORMAL)
+        self.avl_tree.delete(event.key, balance=balance)
+        self.bst_tree.delete(event.key)
+        del self.event_index[event_id]
+
+        for other_id, old_ref in action.old_references.items():
+            if other_id == event_id:
+                continue
+            self._assign_reference(self._find_any_event(other_id), old_ref)
+
+        return {"undone": "creation", "event_id": event_id}
+
+    def _undo_correction(self, action: CorrectionAction) -> dict:
+        """Deshace una corrección:
+        1. Guarda la clave ACTUAL del evento (con los datos corregidos).
+        2. Restaura los valores viejos uno por uno.
+        3. Si la clave cambió, reubica el nodo en AVL/BST.
+        4. Restaura las referencias de todos los afectados.
+        """
+        event_id = action.event_id
+        node = self.event_index[event_id]
+        event = node.event
+
+        current_key = event.key
+
+        event.magnitude = action.old_magnitude
+        event.depth = action.old_depth
+        event.x = action.old_x
+        event.y = action.old_y
+        event.occurred_at = action.old_occurred_at
+        event.is_in_populated_zone = action.old_is_in_populated_zone
+        event.revision = action.old_revision
+        event.attention_status = action.old_attention_status
+
+        # priority y key son @property: al restaurar los valores, la clave
+        # vieja se recalcula sola.
+        new_key = event.key
+
+        if current_key != new_key:
+            balance = (self.mode == Mode.NORMAL)
+            self.avl_tree.delete(current_key, balance=balance)
+            self.bst_tree.delete(current_key)
+            new_node = self.avl_tree.insert(event, balance=balance)
+            self.bst_tree.insert(event)
+            self.event_index[event_id] = new_node
+
+        for other_id, old_ref in action.old_references.items():
+            self._assign_reference(self._find_any_event(other_id), old_ref)
+
+        return {"undone": "correction", "event_id": event_id}
+    
+    def _undo_reactivation(self, action: ReactivationAction) -> dict:
+        """Deshace una reactivación.
+
+        A diferencia de _undo_correction, el evento NO se reubica dentro del
+        árbol — sale del AVL por completo y vuelve a archived_history, porque
+        antes de la reactivación no estaba en el AVL para nada.
+
+        Orden importante: hay que localizar y retirar el evento usando su
+        clave ACTUAL (la que tiene ahora mismo, con los datos de la
+        reactivación) ANTES de restaurar los valores viejos — si se restauran
+        primero, event.key cambia (es un @property) y ya no coincide con la
+        posición donde está insertado en el árbol.
+
+        1. Sacar el evento del AVL/BST/event_index con su clave actual.
+        2. Restaurar los 7 valores viejos sobre el mismo objeto.
+        3. Devolverlo a archived_history.
+        4. Restaurar las referencias de todos los afectados (incluido el
+        propio evento).
+        """
+        event_id = action.event_id
+        node = self.event_index[event_id]
+        event = node.event
+
+        balance = (self.mode == Mode.NORMAL)
+        self.avl_tree.delete(event.key, balance=balance)
+        self.bst_tree.delete(event.key)
+        del self.event_index[event_id]
+
+        event.magnitude = action.old_magnitude
+        event.depth = action.old_depth
+        event.x = action.old_x
+        event.y = action.old_y
+        event.occurred_at = action.old_occurred_at
+        event.is_in_populated_zone = action.old_is_in_populated_zone
+        event.revision = action.old_revision
+        event.attention_status = action.old_attention_status
+
+        self.archived_history[event_id] = event
+
+        for other_id, old_ref in action.old_references.items():
+            self._assign_reference(self._find_any_event(other_id), old_ref)
+
+        return {"undone": "reactivation", "event_id": event_id}
+
+    def _undo_deletion(self, action: DeletionAction) -> dict:
+        """Deshace una eliminación:
+        1. Quita el id de eliminated_IDs (vuelve a estar disponible).
+        2. Reinserta el evento en AVL y BST.
+        3. Actualiza event_index con el nodo nuevo.
+        4. Restaura las referencias viejas.
+        """
+        event = action.event
+        event_id = event.event_id
+
+        self.eliminated_IDs.discard(event_id)
+
+        balance = (self.mode == Mode.NORMAL)
+        node = self.avl_tree.insert(event, balance=balance)
+        self.bst_tree.insert(event)
+        self.event_index[event_id] = node
+
+        for other_id, old_ref in action.old_references.items():
+            self._assign_reference(self._find_any_event(other_id), old_ref)
+
+        return {"undone": "deletion", "event_id": event_id}
+
+    def _undo_attention_change(self, action: AttentionChangeAction) -> dict:
+        """Restaura solo el estado de atención viejo."""
+        event = self._find_any_event(action.event_id)
+        event.attention_status = action.old_attention_status
+        return {"undone": "attention_change", "event_id": action.event_id}
+
+    def _undo_parameter_change(self, action: ParameterChangeAction) -> dict:
+        """Restaura el valor viejo del parámetro. Si era W o R, también
+        restaura las referencias que el cambio había recalculado."""
+        setattr(self, action.parameter_name, action.old_value)
+
+        if action.old_references is not None:
+            for event_id, old_ref in action.old_references.items():
+                self._assign_reference(self._find_any_event(event_id), old_ref)
+
+        return {"undone": "parameter_change", "parameter": action.parameter_name}
+
+    def _undo_clock_advance(self, action: ClockAdvanceAction) -> dict:
+        """Restaura el reloj de simulación al instante exacto previo."""
+        self.simulation_clock = action.old_clock
+        return {"undone": "clock_advance"}
+
+    def _undo_queue_step(self, action: QueueStepAction) -> dict:
+        """Deshace un paso de la cola.
+
+        Orden:
+        1. Quitar la estación confirmada (si aplica), ANTES de revertir
+           inner_action: si inner_action fue una creación, el evento
+           desaparece y ya no podríamos quitarle la estación.
+        2. Revertir inner_action (si existe) llamando al helper
+           correspondiente.
+        3. Devolver el reporte a la cola en su posición original.
+        """
+        # 1. Estación confirmada.
+        if action.confirmed_station_id is not None:
+            station = self.stations.get(action.confirmed_station_id)
+            if station is not None:
+                try:
+                    event = self._find_any_event(action.report.event_id)
+                    event.stations.discard(station)
+                except KeyError:
+                    # El evento ya no existe (por ejemplo, era una creación
+                    # y aún no se revirtió). No hay estación que quitar.
+                    pass
+
+        # 2. Revertir inner_action si la hubo.
+        if action.inner_action is not None:
+            inner = action.inner_action
+
+            if isinstance(inner, CreationAction):
+                self._undo_creation(inner)
+
+            elif isinstance(inner, CorrectionAction):
+                self._undo_correction(inner)
+                
+            elif isinstance(inner, ReactivationAction):
+                self._undo_reactivation(inner)
+            else:
+                self.undo_stack.push(action)
+                raise NotImplementedError(
+                    f"QueueStepAction con inner_action de tipo {type(inner).__name__}"
+                )
+
+        # 3. Devolver el reporte a la cola.
+        self.report_queue.insert_at(action.queue_position, action.report)
+
+        return {"undone": "queue_step", "event_id": action.report.event_id}
+
+    def _undo_mass_archive(self, action: MassArchiveAction) -> dict:
+        """Deshace un archivo masivo.
+
+        Pasos:
+        1. Re-enganchar el subárbol desprendido en su posición original,
+           subiendo por el camino para rebalancear.
+        2. Recorrer los nodos del subárbol y devolverlos a event_index y
+           sacarlos de archived_history.
+        3. Restar rotation_delta de las métricas.
+
+        Las asociaciones no se tocan: el archivo no las cambió.
+        """
+        balance = (self.mode == Mode.NORMAL)
+
+        self.avl_tree.attach_subtree(
+            action.archived_root,
+            action.former_parent,
+            action.was_left_child,
+            balance=balance,
+        )
+
+        for node in self.avl_tree.subtree_nodes(action.archived_root):
+            event_id = node.event.event_id
+            self.event_index[event_id] = node
+            if event_id in self.archived_history:
+                del self.archived_history[event_id]
+
+        self.avl_tree.revert_rotation_metrics(action.rotation_delta)
+
+        root_id = action.event_ids[0] if action.event_ids else None
+        return {"undone": "mass_archive", "root_id": root_id}
+
+    def _undo_global_recovery(self, action: GlobalRecoveryAction) -> dict:
+        """Deshace una recuperación global: restaura la topología del AVL
+        y las métricas de rotación, y vuelve al modo anterior."""
+        self.avl_tree.restore_topology(action.topology_snapshot)
+        self.avl_tree.revert_rotation_metrics(action.rotation_delta)
+        self.mode = action.previous_mode
+        return {"undone": "global_recovery"}
+
+    def _undo_load(self, action: LoadAction) -> dict:
+        """Deshace la carga de un escenario restaurando el estado anterior.
+
+        PENDIENTE: depende de cómo se implemente la carga de escenario
+        (sección 12).
+        """
+        raise NotImplementedError("_undo_load pendiente")
+
+    def first_k_pending(self, k: int) -> tuple[list[Event], int]:
+        """Primeros k eventos pendientes de atención, en orden descendente
+        de K = (P, M, I).
+
+        Sección 11, primera consulta: "Los primeros k eventos pendientes de
+        atención en orden descendente de K. k es entero positivo; si hay
+        menos pendientes, se muestran todos los disponibles."
+
+        Decisiones:
+        - k <= 0 → ValueError. El enunciado exige "entero positivo", así
+            que no se admite 0 ni negativos.
+        - Se usa reverse-inorden (derecha, nodo, izquierda) con corte
+            temprano: en cuanto se juntan k pendientes, se detiene sin
+            visitar más nodos.
+        - Devuelve tupla (lista_de_eventos, nodos_examinados). El enunciado
+            exige reportar la cantidad de nodos del AVL examinados.
+        """
+        if k <= 0:
+            raise ValueError("k must be a positive integer")
+
+        result = []
+        counter = [0]
+        self._collect_k_pending(self.avl_tree.root, k, result, counter)
+        return result, counter[0]
+
+    def _collect_k_pending(self, node, k, result, counter):
+        """AUXILIAR: reverse-inorden con corte. Primero derecha (K alto),
+        luego el nodo, luego izquierda (K bajo). Corta en cuanto result
+        tiene k elementos."""
+        if node is None or len(result) >= k:
+            return
+
+        self._collect_k_pending(node.right_son, k, result, counter)
+        if len(result) >= k:
+            return
+
+        counter[0] += 1
+        if node.event.attention_status == AttentionStatus.PENDING:
+            result.append(node.event)
+
+        self._collect_k_pending(node.left_son, k, result, counter)
+
+    def events_in_magnitude_range(self, min_mag: float, max_mag: float) -> tuple[list[Event], int]:
+        """Eventos activos con min_mag <= M <= max_mag (inclusivo), en orden
+        ascendente de K.
+
+        Sección 11, segunda consulta: "Eventos dentro de un intervalo
+        inclusivo de magnitud."
+
+        Decisiones:
+        - min_mag > max_mag → ValueError. Rango inválido.
+        - No se puede podar el árbol: K ordena por PRIORIDAD antes que por
+            magnitud, así que una rama con prioridad baja puede contener
+            cualquier magnitud. Se recorre el árbol completo (inorden).
+        - Devuelve tupla (lista_de_eventos, nodos_examinados). El enunciado
+            exige reportar la cantidad de nodos del AVL examinados.
+        """
+        if min_mag > max_mag:
+            raise ValueError("min_mag cannot be greater than max_mag")
+
+        result = []
+        counter = [0]
+        self._collect_by_magnitude(self.avl_tree.root, min_mag, max_mag, result, counter)
+        return result, counter[0]
+
+    def _collect_by_magnitude(self, node, min_mag, max_mag, result, counter):
+        """AUXILIAR: inorden completo (izquierda, nodo, derecha). Cada nodo
+        no vacío cuenta como examinado."""
+        if node is None:
+            return
+        counter[0] += 1
+        self._collect_by_magnitude(node.left_son, min_mag, max_mag, result, counter)
+        if min_mag <= node.event.magnitude <= max_mag:
+            result.append(node.event)
+        self._collect_by_magnitude(node.right_son, min_mag, max_mag, result, counter)
+
+    def events_by_depth_and_date(self, max_depth: float, min_date: datetime, max_date: datetime) -> tuple[list[Event], int]:
+        """Eventos activos con depth <= max_depth Y min_date <= occurred_at <=
+        max_date (ambos límites inclusivos), en orden ascendente de K.
+
+        Sección 11, segunda consulta (segunda mitad): "eventos con profundidad
+        del hipocentro menor o igual a un límite dentro de un intervalo
+        inclusivo de fechas."
+
+        Decisiones:
+        - min_date > max_date → ValueError. Mismo criterio que
+        events_in_magnitude_range con min_mag > max_mag.
+        - max_depth no se valida aquí (podría venir negativo): los rangos de
+        los datos ya los valida el schema de pydantic, igual que el resto
+        de Scenario.
+        - No se puede podar el árbol: ni depth ni occurred_at forman parte de
+        K = (P, M, I), ni siquiera en segundo lugar (a diferencia de la
+        magnitud, que sí es parte de K aunque no mande el orden). No hay
+        ninguna relación entre la posición de un nodo y estos dos datos.
+        Se recorre el árbol completo (inorden).
+        - min_date/max_date se normalizan con _as_utc antes de comparar,
+        igual que ya hace update_simulation_clock y _validate_report con
+        fechas que entran desde afuera: así no falla si llegan sin zona
+        horaria o en otra zona distinta a la del evento guardado.
+        - Devuelve tupla (lista_de_eventos, nodos_examinados), igual que las
+        otras consultas de esta sección (el enunciado lo exige para todas).
+        """
+        min_date = self._as_utc(min_date)
+        max_date = self._as_utc(max_date)
+
+        if min_date > max_date:
+            raise ValueError("min_date cannot be greater than max_date")
+
+        result = []
+        counter = [0]
+        self._collect_by_depth_and_date(self.avl_tree.root, max_depth, min_date, max_date, result, counter)
+        return result, counter[0]
+
+    def _collect_by_depth_and_date(self, node, max_depth, min_date, max_date, result, counter):
+        """AUXILIAR: inorden completo (izquierda, nodo, derecha). Cada nodo
+        no vacío cuenta como examinado."""
+        if node is None:
+            return
+        counter[0] += 1
+        self._collect_by_depth_and_date(node.left_son, max_depth, min_date, max_date, result, counter)
+        event = node.event
+        if event.depth <= max_depth and min_date <= event.occurred_at <= max_date:
+            result.append(event)
+        self._collect_by_depth_and_date(node.right_son, max_depth, min_date, max_date, result, counter)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1082,7 +1738,7 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
 
 
     def update_station(self, station_id: str, changes: dict) -> Station:
-        """This method is called to update the data of a zone that already exists"""
+        """This method is called to update the data of a station that already exists"""
         current_station = self.get_station(station_id)
         #Either we put the new values, or if there isn't a new value, the old one remains
         updated_values = {
@@ -1105,29 +1761,31 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
         return updated_station
 
     def delete_station(self, station_id: str) -> None:
-        """This method deletes a zone"""
+        """This method deletes a station"""
         self.get_station(station_id)
         del self.stations[station_id]
+
 
     """==============================================="""
     """================REPORT METHODS================="""
     """==============================================="""
 
-    # La cola solo guarda reportes PREPARADOS: encolar no toca eventos ni
-    # árboles. La decisión de cada reporte (tabla de la sección 6) se toma
-    # al procesarlo, en process_next_report(), que aún no existe porque
-    # depende de la creación/corrección de eventos.
+    # The queue only stores PREPARED reports: enqueueing does not touch
+    # events or trees. The decision for each report (section 6 table) is
+    # made when processing it, in process_next_report().
     #
-    # Decisiones del equipo (29-sep):
-    # - Los reportes con fecha posterior al reloj se rechazan AL ENCOLAR.
-    # - Un reporte encolado no se puede quitar individualmente; solo se
-    #   puede vaciar la cola completa.
+    # Team decisions (Sep-29):
+    # - Reports with a timestamp later than the clock are rejected at
+    #   ENQUEUE time.
+    # - A queued report cannot be removed individually; only the whole
+    #   queue can be cleared.
 
     def _validate_report(self, report: Report) -> None:
-        """Validaciones de un reporte que dependen del estado del escenario.
-        Los rangos y formatos ya los validó el schema (ReportCreate).
-        Lanza KeyError si la estación no está registrada y ValueError si la
-        fecha de ocurrencia es posterior al reloj de simulación."""
+        """Validations for a report that depend on the scenario state.
+        Ranges and formats were already validated by the schema
+        (ReportCreate).
+        Raises KeyError if the station is not registered, and ValueError
+        if the occurrence time is later than the simulation clock."""
         station_id = report.station.station_id
         if self.stations.get(station_id) is not report.station:
             raise KeyError(f"Station '{station_id}' was not found")
@@ -1160,18 +1818,19 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
         return 1
 
     def enqueue_report(self, report: Report) -> int:
-        """Agrega un reporte al final de la cola FIFO y devuelve su posición
-        (1 = el próximo en procesarse). Si no es válido, lanza la excepción
-        de _validate_report y la cola no cambia. O(1)."""
+        """Append a report to the end of the FIFO queue and return its
+        position (1 = the next one to be processed). If the report is not
+        valid, raises the exception from _validate_report and the queue
+        stays unchanged. O(1)."""
         self._validate_report(report)
         self.report_queue.enqueue(report)
         return len(self.report_queue)
 
     def enqueue_reports(self, reports: list[Report]) -> int:
-        """Encola una ráfaga de reportes en el orden recibido, de forma
-        atómica: primero valida TODOS y solo si todos son válidos los
-        encola. Así un error en el reporte 5 no deja encolados los 4
-        primeros. Devuelve la posición del primero de la ráfaga. O(N)."""
+        """Enqueue a burst of reports in the order received, atomically:
+        first validate ALL of them, and only if every one is valid, enqueue
+        them. So an error on report 5 does not leave the first 4 enqueued.
+        Returns the position of the first report of the burst. O(N)."""
         for report in reports:
             self._validate_report(report)
 
@@ -1181,21 +1840,21 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
         return first_position
 
     def list_reports(self) -> list[Report]:
-        """Copia de la cola en orden de recepción (el primero es el próximo
-        que se procesará). Es una copia: modificar la lista no altera la
-        cola. O(n)."""
+        """Copy of the queue in reception order (the first one is the next
+        to be processed). It is a copy: modifying the list does not alter
+        the queue. O(n)."""
         return self.report_queue.items()
 
     def clear_report_queue(self) -> int:
-        """Descarta todos los reportes pendientes y devuelve cuántos había.
-        No toca eventos, árboles ni reloj.
+        """Discard all pending reports and return how many there were.
+        Does not touch events, trees, or the clock.
 
-        PENDIENTE (decisión del equipo): por ahora NO se registra en la pila
-        de deshacer. El enunciado no lista "vaciar la cola" entre las
-        acciones de la sección 13, pero la cola sí forma parte del estado
-        recuperable."""
+        PENDING (team decision): for now this is NOT recorded on the undo
+        stack. The statement does not list "clear the queue" among the
+        section 13 actions, but the queue IS part of the recoverable
+        state."""
         return self.report_queue.clear()
-
+    
     """==============================================="""
     """============TREE STATE (VISTAS)================"""
     """==============================================="""

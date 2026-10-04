@@ -173,14 +173,23 @@ class DeletionAction:
     def __init__(self, event: Event):
         self.event = event
 
-"""Guarda la raíz del subárbol que se archivó en bloque, su antiguo padre y de qué lado colgaba, más la lista de ids afectados, para poder reinjertar todo el subárbol en su posición original al deshacer."""
 class MassArchiveAction:
-    def __init__(self, archived_root: AVLNode, former_parent: Optional[AVLNode], was_left_child: Optional[bool], event_ids: list[int]):
+    """Guarda la raíz del subárbol que se archivó en bloque, su antiguo
+    padre y de qué lado colgaba, más la lista de ids afectados, para poder
+    reinjertar todo el subárbol en su posición original al deshacer.
+
+    rotation_delta: lo que sumó detach_subtree a las métricas de rotación.
+    Se resta al deshacer con avl_tree.revert_rotation_metrics(delta).
+    """
+    def __init__(self, archived_root: AVLNode, former_parent: Optional[AVLNode],
+                 was_left_child: Optional[bool], event_ids: list[int],
+                 rotation_delta: dict = None):
         self.archived_root = archived_root
         self.former_parent = former_parent
         self.was_left_child = was_left_child
         self.event_ids = event_ids
-
+        self.rotation_delta = rotation_delta or {}
+        
 class ParameterChangeAction:
     """Guarda el nombre del parámetro global (L, W, R o T), su valor
     anterior, y — cuando el parámetro afecta las asociaciones (W o R) —
