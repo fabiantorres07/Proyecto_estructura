@@ -904,8 +904,30 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
 
         Aunque el reporte sea rechazado/antiguo/conflicto, se apila una
         QueueStepAction para poder devolverlo a su posición en la cola al
-        deshacer. Si el caso fue crear o corregir, la QueueStepAction también
-        guarda la acción interna que ese paso generó.
+        deshacer.
+
+        ──────────────────────────────────────────────────────────────
+        El problema de las DOS acciones por un solo paso
+        ──────────────────────────────────────────────────────────────
+
+        Un paso de la cola es UNA sola acción para el usuario, pero por
+        dentro puede disparar otra operación (crear o corregir un evento).
+        create_event y correct_event apilan su propia acción al terminar
+        (CreationAction o CorrectionAction). Si process_next_report además
+        apila una QueueStepAction, quedan DOS acciones en la pila por un
+        solo paso, y el usuario tendría que pulsar "deshacer" dos veces.
+
+        La solución es sacar con pop la acción interna que create_event o
+        correct_event acaban de apilar, y meterla DENTRO de la
+        QueueStepAction. Así la pila solo ve una acción por paso, pero esa
+        acción lleva adentro todo lo necesario para revertir la operación
+        interna.
+
+        Analogía: en la pila de recibos, en vez de meter dos sobres
+        separados ("creé el evento 7" y "procesé un reporte"), se mete UN
+        solo sobre grande que por dentro contiene el sobre chico ("creé el
+        evento 7"). Al deshacer, se abre el grande y se revierte todo de
+        una sola operación.
         """
 
         # 1. Cola vacía → no hay nada que procesar.
@@ -927,7 +949,7 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
             case = "eliminated"
 
         # Caso: id desconocido → crear evento nuevo.
-        # "Desconocido" = no está activo ni archivado ni eliminado.
+        # "Desconocido" = no está activo, ni archivado, ni eliminado.
         elif event_id not in self.event_index and event_id not in self.archived_history:
             case = "created"
             self.create_event(
@@ -951,13 +973,14 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
             if report.revision_num > archived_event.revision:
                 # Un reporte con revisión mayor REACTIVA el evento archivado:
                 # sale de archived_history y vuelve al AVL con los datos
-                # corregidos (sección 6). Esto es una operación completa por
-                # sí sola, con reubicación en árboles y recálculo de referencias.
-                # PENDIENTE de implementar como helper aparte.
-                case = "archived_needs_reactivation"
+                # corregidos (sección 6).
+                case = "reactivated"
+                self.archived_reactivation(report)
+                # archived_reactivation NO apila acción interna (ver su docstring).
+                # Al deshacer este paso habrá que revertir la reactivación a mano;
+                # pendiente para undo().
             elif report.revision_num == archived_event.revision:
                 # Confirmación o conflicto sobre un archivado: no lo reactiva.
-                # Se rechaza igual que "antiguo".
                 case = "archived_not_reactivated"
             else:
                 case = "old"
