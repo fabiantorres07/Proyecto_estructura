@@ -1,4 +1,3 @@
-from app.domain.event import Event
 from enum import Enum
 from datetime import datetime, timedelta, timezone
 from time import monotonic
@@ -23,7 +22,9 @@ from app.structures.avl_node import AVLNode
 from app.structures.bst_node import BSTNode
 from app.structures.bst_tree import BSTTree
 
-
+"""==========================================================================================
+INFRASTRUCTURE: Methods that are important for the project but are not specific to any class
+============================================================================================="""
 
 class Scenario:
 
@@ -146,6 +147,9 @@ class Scenario:
         self.undo_stack.push(ClockAdvanceAction(old_clock))
 
         return self.simulation_clock
+
+
+    
     """==============================================="""
     """================ZONE METHODS==================="""
     """==============================================="""
@@ -200,6 +204,8 @@ class Scenario:
         """This method deletes a zone"""
         zone = self.get_zone(zone_name)
         self.zones.remove(zone)
+
+
 
     """==============================================="""
     """================STATION METHODS================"""
@@ -760,7 +766,7 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
         old_attention_status = event.attention_status
 
         # 3. Aplicar el cambio sobre el mismo objeto.
-        event.mark_as_reviwed()
+        event.mark_as_reviewed()
 
         # 4. No hay paso de árboles/event_index/asociaciones: la clave no
         # cambió, así que la posición del evento en el AVL y el BST sigue
@@ -1189,6 +1195,7 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
         # 5. Mover los eventos al histórico y sacarlos del índice activo.
         events = self.avl_tree.subtree_events(archived_root)
         for event in events:
+            self.bst_tree.delete(event.key)
             self.archived_history[event.event_id] = event
             del self.event_index[event.event_id]
         # OJO: no se toca reference_id ni referenced_by (asociaciones).
@@ -1549,6 +1556,7 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
         for node in self.avl_tree.subtree_nodes(action.archived_root):
             event_id = node.event.event_id
             self.event_index[event_id] = node
+            self.bst_tree.insert(node.event)
             if event_id in self.archived_history:
                 del self.archived_history[event_id]
 
@@ -1601,6 +1609,8 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
         self._collect_k_pending(self.avl_tree.root, k, result, counter)
         return result, counter[0]
 
+    
+
     def _collect_k_pending(self, node, k, result, counter):
         """AUXILIAR: reverse-inorden con corte. Primero derecha (K alto),
         luego el nodo, luego izquierda (K bajo). Corta en cuanto result
@@ -1617,6 +1627,76 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
             result.append(node.event)
 
         self._collect_k_pending(node.left_son, k, result, counter)
+
+    def event_associations(self, event_id: int) -> dict:
+        """Devuelve las asociaciones completas de un evento: candidatos,
+        referencia elegida, y quiénes lo usan como referencia.
+
+        Sección 11, cuarta consulta: "Candidatos y referencia elegida para
+        un evento, así como los eventos que lo utilizan como referencia. Se
+        identifica si cada resultado está activo o archivado."
+
+        Se devuelven TRES bloques, no dos, porque la relación es
+        bidireccional: no basta con saber a quién apunta este evento
+        (referencia) ni quiénes podrían ser su referencia (candidatos).
+        También hay que saber quiénes apuntan a él. Sin esa tercera parte,
+        la consulta solo daría la mitad de la red de asociaciones: las
+        salientes pero no las entrantes. Los candidatos y la referencia
+        salen de _build_associations (que ya usa get_event). El tercer
+        bloque sale del índice inverso referenced_by, que existe justo
+        para responder "quién me tiene como referencia" sin recorrer todos
+        los eventos.
+
+        Hay dos métodos (get_event y event_associations) porque sirven a
+        dos propósitos distintos:
+        - get_event devuelve TODO sobre un evento: datos, revisión,
+        estaciones, prioridad, estado, profundidad, altura, factor de
+        balance, y las asociaciones como un bloque más. Es la vista
+        completa de un evento.
+        - event_associations se enfoca SOLO en la red de asociaciones, y
+        agrega el bloque de "quién me usa" que get_event no trae. Es la
+        vista específica para cuando el frontend quiere mostrar la red
+        de réplicas de un evento sin cargar toda su ficha.
+
+        Si el id no existe o está eliminado, lanza ValueError: los
+        eliminados no forman parte del sistema (solo queda su id en
+        eliminated_IDs), así que no tiene sentido pedir sus asociaciones.
+
+        Devuelve un dict con:
+            {
+                "reference": {"event": Event, "status": "active"|"archived"} o None,
+                "candidates": [{"event": Event, "status": ...}, ...],
+                "used_as_reference_by": [{"event": Event, "status": ...}, ...],
+            }
+        `candidates` no incluye la referencia (ya viene en su propio
+        bloque). `used_as_reference_by` puede estar vacío si nadie lo usa
+        como referencia.
+
+        No reporta nodos examinados: las otras consultas de la sección 11
+        sí lo hacen porque navegan el AVL directamente; aquí solo se lee
+        un dict (referenced_by) y se delega el cálculo de candidatos a
+        _build_associations, que ya es una consulta en sí misma.
+        """
+        if event_id in self.eliminated_IDs:
+            raise ValueError(f"El evento {event_id} está eliminado, no tiene asociaciones")
+        if event_id not in self.event_index and event_id not in self.archived_history:
+            raise ValueError(f"No existe un evento activo o archivado con id {event_id}")
+
+        associations = self._build_associations(event_id)
+
+        used_by_data = []
+        for other_id in self.referenced_by.get(event_id, set()):
+            other = self._find_any_event(other_id)
+            used_by_data.append({
+                "event": other,
+                "status": self._event_status(other_id),
+            })
+
+        return {
+            "reference": associations["reference"],
+            "candidates": associations["candidates"],
+            "used_as_reference_by": used_by_data,
+        }
 
     def events_in_magnitude_range(self, min_mag: float, max_mag: float) -> tuple[list[Event], int]:
         """Eventos activos con min_mag <= M <= max_mag (inclusivo), en orden
@@ -1791,6 +1871,116 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
             "inconsistent_event_ids": inconsistent_ids,
             "issues": issues,
         }
+    def count_events_by_priority(self) -> dict:
+        """Cuenta eventos activos y archivados por prioridad.
+
+        Sección 14 (Auditoría e indicadores): "La interfaz mantendrá visibles
+        o accesibles los siguientes indicadores: ... Eventos por prioridad,
+        pendientes de atención y eventos marcados con acceso costoso."
+
+        Se cuentan activos Y archivados (los dos forman parte del sistema y
+        ambos pueden ser referencia de otros eventos según la sección 7). Los
+        eliminados NO se cuentan: no están en el sistema, solo queda su id.
+
+        Se calcula AL VUELO, no acumulado: la prioridad de un evento puede
+        cambiar (corrección que suba la magnitud, cambio de zona poblada), y
+        mantener un contador acumulado obligaría a ajustarlo en cada una de
+        esas operaciones. Es más simple y consistente recalcularlo cada vez.
+
+        Devuelve:
+            {"P1": n, "P2": n, "P3": n}
+
+        Costo: O(n).
+        """
+        counts = {"P1": 0, "P2": 0, "P3": 0}
+        for event in self._all_active_and_archived_events():
+            counts[f"P{event.priority}"] += 1
+        return counts
+
+    def compare_avl_bst(self) -> dict:
+        """Compara AVL vs BST: altura, hojas y comparaciones al buscar las
+        mismas claves. Sección 11, último bloque: "Se compararán AVL y BST
+        mediante altura, hojas y comparaciones al buscar las mismas claves."
+
+        Para cada evento activo se busca su clave en ambos árboles. search()
+        ya devuelve (nodo, nodos_visitados), así que solo se suman.
+
+        LIMITACIÓN: los dos árboles están sincronizados en el estado actual,
+        pero no con el mismo orden de inserción histórico. Si el escenario
+        se armó en orden ascendente, el BST está degenerado y la diferencia
+        es enorme; si el orden fue aleatorio, la diferencia es más sutil.
+        El caso "todo en orden ascendente" se prueba con datos específicos,
+        no con esta consulta.
+
+        Devuelve dos bloques comparables (avl y bst), cada uno con size,
+        height, leaves, total_comparisons, max_single_search y
+        avg_comparisons, más n_searches.
+        """
+        # Claves de todos los eventos activos, en orden ascendente de K.
+        keys = [event.key for event in self.avl_tree.inorder()]
+
+        # Sumar nodos visitados al buscar cada clave en cada árbol.
+        # max_* guarda la peor búsqueda individual (profundidad máxima + 1).
+        avl_total = 0
+        avl_max = 0
+        for key in keys:
+            _, visited = self.avl_tree.search(key)
+            avl_total += visited
+            if visited > avl_max:
+                avl_max = visited
+
+        bst_total = 0
+        bst_max = 0
+        for key in keys:
+            _, visited = self.bst_tree.search(key)
+            bst_total += visited
+            if visited > bst_max:
+                bst_max = visited
+
+        n = len(keys)
+        return {
+            "avl": {
+                "size": len(self.avl_tree),
+                "height": self.avl_tree.height(),
+                "leaves": self.avl_tree.count_leaves(),
+                "total_comparisons": avl_total,
+                "max_single_search": avl_max,
+                "avg_comparisons": (avl_total / n) if n else 0.0,
+            },
+            "bst": {
+                "size": len(self.bst_tree),
+                "height": self.bst_tree.height(),
+                "leaves": self.bst_tree.count_leaves(),
+                "total_comparisons": bst_total,
+                "max_single_search": bst_max,
+                "avg_comparisons": (bst_total / n) if n else 0.0,
+            },
+            "n_searches": n,
+        } 
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     """==============================================="""
     """========RECUPERACIÓN GLOBAL (SECCIÓN 8)========"""
