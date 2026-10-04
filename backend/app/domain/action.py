@@ -168,10 +168,62 @@ class CorrectionAction:
         self.old_attention_status = old_attention_status
         self.old_references = old_references
 
-"""Guarda el Event completo que fue eliminado, ya que una vez borrado no queda en ninguna otra estructura; al deshacer se reinserta tal cual."""
+
+class ReactivationAction:
+    """Acción que representa la reactivación de un evento archivado por
+    un reporte con revisión mayor (sección 6).
+
+    Se apila en Scenario.undo_stack dentro de archived_reactivation().
+    process_next_report la saca con pop() y la mete dentro del
+    QueueStepAction, igual que ya hace con CreationAction y
+    CorrectionAction.
+
+    Diferencias con CorrectionAction:
+    - Mismos campos old_* + old_references, pero el "antes" del evento
+      no es estar en el AVL: es estar en archived_history.
+    - Al deshacer, el evento NO se reubica dentro del árbol: sale del
+      AVL/BST/event_index y vuelve a archived_history (ver
+      _undo_reactivation en Scenario).
+
+    Por qué es clase aparte y no reutilizar CorrectionAction: el criterio
+    del proyecto nunca fue "qué datos guarda" sino "qué tiene que hacer
+    undo() con ellos", y ahí sí son distintos.
+    """
+
+    def __init__(
+        self,
+        event_id: int,
+        old_magnitude: float,
+        old_depth: float,
+        old_x: float,
+        old_y: float,
+        old_occurred_at: datetime,
+        old_is_in_populated_zone: bool,
+        old_revision: int,
+        old_attention_status,
+        old_references: dict[int, int | None],
+    ):
+        self.event_id = event_id
+        self.old_magnitude = old_magnitude
+        self.old_depth = old_depth
+        self.old_x = old_x
+        self.old_y = old_y
+        self.old_occurred_at = old_occurred_at
+        self.old_is_in_populated_zone = old_is_in_populated_zone
+        self.old_revision = old_revision
+        self.old_attention_status = old_attention_status
+        self.old_references = old_references
+
+
 class DeletionAction:
-    def __init__(self, event: Event):
+    """Guarda el Event completo que fue eliminado, ya que una vez borrado
+    no queda en ninguna otra estructura; al deshacer se reinserta tal cual.
+    También guarda las referencias viejas de los eventos afectados por la
+    eliminación (los que tenían al eliminado como referencia), para poder
+    restaurarlas al deshacer."""
+    def __init__(self, event: Event, old_references: dict[int, int | None]):
         self.event = event
+        self.old_references = old_references
 
 class MassArchiveAction:
     """Guarda la raíz del subárbol que se archivó en bloque, su antiguo
@@ -264,7 +316,13 @@ class GlobalRecoveryAction:
 
 """Guarda el reporte procesado y la posición que ocupaba en la cola, junto con la acción interna que generó ese paso (creación o corrección) y la estación confirmada si aplicó, para poder revertir el procesamiento de ese reporte y devolverlo a su posición en la cola."""
 class QueueStepAction:
-    def __init__(self, report: Report, queue_position: int, inner_action: Optional[CreationAction | CorrectionAction] = None, confirmed_station_id: Optional[int] = None):
+    def __init__(
+        self,
+        report: Report,
+        queue_position: int,
+        inner_action: Optional[CreationAction | CorrectionAction | ReactivationAction] = None,
+        confirmed_station_id: Optional[int] = None,
+    ):
         self.report = report
         self.queue_position = queue_position
         self.inner_action = inner_action

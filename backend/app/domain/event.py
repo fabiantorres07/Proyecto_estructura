@@ -104,7 +104,7 @@ class Event:
 
         return old_key, new_key
     
-    def mark_as_reviwed(self):
+    def mark_as_reviewed(self):
         self.attention_status = AttentionStatus.REVIEWED
 
 # El siguiente enum se usa para definir el estado de atencion del evento
