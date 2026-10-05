@@ -6,8 +6,11 @@ from app.domain.scenario import Scenario
 from app.schemas.report import (
     ReportBatchCreate,
     ReportCreate,
+    ReportProcessedResponse,
     ReportQueueCleared,
     ReportResponse,
+    ReportReviewEvent,
+    ReportReviewResponse,
 )
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -128,3 +131,88 @@ def list_reports(scenario: Scenario = Depends(get_scenario)):
 def clear_report_queue(scenario: Scenario = Depends(get_scenario)):
     """Vacía la cola completa y devuelve cuántos reportes se descartaron."""
     return {"removed": scenario.clear_report_queue()}
+    
+    
+def _current_event_for_report(event_id: int, scenario: Scenario):
+    if event_id in scenario.event_index:
+        event = scenario.event_index[event_id].event
+        state = "active"
+    elif event_id in scenario.archived_history:
+        event = scenario.archived_history[event_id]
+        state = "archived"
+    elif event_id in scenario.eliminated_IDs:
+        return "deleted", None
+    else:
+        return "new", None
+    
+    return state, ReportReviewEvent(
+        event_id=event.event_id,
+        magnitude=event.magnitude,
+        depth=event.depth,
+        x=event.x,
+        y=event.y,
+        occurred_at=event.occurred_at,
+        revision=event.revision,
+        stations=sorted(station.station_id for station in event.stations),
+        attention_status=event.attention_status.value,
+        is_in_populated_zone=event.is_in_populated_zone,
+        priority=event.priority,
+    )
+    
+    
+@router.get("/next", response_model=ReportReviewResponse)
+def get_next_report(scenario: Scenario = Depends(get_scenario)):
+    reports = scenario.list_reports()
+    if not reports:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No hay reportes pendientes en la cola",
+        )
+    
+    report = reports[0]
+    current_status, current_event = _current_event_for_report(report.event_id, scenario)
+    return {
+        "report": _to_response(report, 1),
+        "current_event_status": current_status,
+        "current_event": current_event,
+    }
+    
+    
+@router.put("/next", response_model=ReportResponse)
+def update_next_report(
+    data: ReportCreate,
+    scenario: Scenario = Depends(get_scenario),
+):
+    try:
+        reports = scenario.list_reports()
+        if not reports:
+            raise ValueError("No hay reportes pendientes en la cola")
+        report = _build_report(data, scenario)
+        report.revision_num = reports[0].revision_num
+        updated_report = scenario.replace_next_report(report)
+        return _to_response(updated_report, 1)
+    except (KeyError, ValueError) as error:
+        _raise_http(error)
+    
+    
+@router.post("/process-next", response_model=ReportProcessedResponse)
+def process_next_report(scenario: Scenario = Depends(get_scenario)):
+    try:
+        result = scenario.process_next_report()
+        report = result["report"]
+        return {
+            "case": result["case"],
+            "event_id": result["event_id"],
+            "revision_num": report.revision_num,
+        }
+    except ValueError as error:
+        _raise_http(error)
+    
+    
+@router.delete("/next", response_model=ReportResponse)
+def discard_next_report(scenario: Scenario = Depends(get_scenario)):
+    try:
+        report = scenario.discard_next_report()
+        return _to_response(report, 1)
+    except ValueError as error:
+        _raise_http(error)

@@ -37,6 +37,14 @@ const ReportQueue: React.FC = () => {
             >
                 Crear
             </button>
+            <button
+                type="button"
+                disabled={queue.length === 0}
+                onClick={() => navigate("/reportes/revisar")}
+                className="ml-2 px-4 py-2 border border-primary text-primary hover:bg-primary hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+                Revisar siguiente
+            </button>
             <GenericTable
                 data={queue}
                 columnLabels={{ position: "posición", event_id: "id evento", revision_num: "número de revisión", station_id: "estación" }}

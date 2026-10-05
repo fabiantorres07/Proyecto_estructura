@@ -8,13 +8,14 @@ import { formatLocalDateTime } from "../../utils/utils";
 import { parseLocalDateTime } from "../../utils/utils";
 
 interface MyFormProps {
-    mode: number; // 1 (create) or 2 (update)
-    handleAction: (values: ReportFormValues) => void;
+    mode: number; // 1 (create), 2 (update), or 3 (review queued report)
+    handleAction: (values: ReportFormValues) => void | Promise<void>;
     report?: ReportFormValues | null;
     stations: Station[];
+    onFormChange?: () => void;
 }
 
-const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report, stations }) => {
+const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report, stations, onFormChange }) => {
     const navigate = useNavigate();
 
     return (
@@ -83,10 +84,15 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
 
                     try {
                         const latestSimulationClock = await clockService.getClock();
-                        if (parsedDate > latestSimulationClock) {
+                        const occurredAtLocal = dateValue.length === 16
+                            ? `${dateValue}:00`
+                            : dateValue;
+                        const simulationClockLocal = formatLocalDateTime(latestSimulationClock);
+
+                        if (occurredAtLocal > simulationClockLocal) {
                             setFieldError(
                                 "ocurred_at",
-                                "La fecha del sismo no puede ser posterior al reloj de simulación",
+                                `La fecha del sismo no puede ser posterior al reloj de simulación (${simulationClockLocal.replace("T", " ")})`,
                             );
                             return;
                         }
@@ -99,7 +105,7 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
                 }
 
                 const { ocurred_at: _dateValue, ...reportValues } = values;
-                handleAction({
+                await handleAction({
                     ...reportValues,
                     ...(occurredAt ? { ocurred_at: occurredAt } : {}),
                 } as ReportFormValues);
@@ -108,6 +114,7 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
             {({ handleSubmit }) => (
             <Form
                 onSubmit={handleSubmit}
+                onChange={mode === 3 ? onFormChange : undefined}
                 className="grid grid-cols-1 gap-4 p-6 bg-white rounded-md shadow-md"
             >
                 <div>
@@ -126,6 +133,7 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
                             type="number"
                             inputMode="numeric"
                             name="event_id"
+                            disabled={mode === 3}
                             className="w-full rounded-r-md border border-gray-300 p-2"
                         />
                     </div>
@@ -308,7 +316,7 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
                             ${mode === 1 ? "bg-primary" : "bg-meta-3"}
                         `}
                     >
-                        {mode === 1 ? "Crear" : "Actualizar"}
+                        {mode === 1 ? "Crear" : mode === 3 ? "Guardar cambios" : "Actualizar"}
                     </button>
                 </div>
             </Form>

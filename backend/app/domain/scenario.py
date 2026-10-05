@@ -475,6 +475,26 @@ class Scenario:
         to be processed). It is a copy: modifying the list does not alter
         the queue. O(n)."""
         return self.report_queue.items()
+    
+    def replace_next_report(self, report: Report) -> Report:
+        """Replace the FIFO head without changing its position or revision."""
+        if self.report_queue.is_empty():
+            raise ValueError("No hay reportes pendientes en la cola")
+        
+        current = self.report_queue.peek()
+        if report.event_id != current.event_id:
+            raise ValueError("El identificador del reporte en revisión no se puede cambiar")
+        
+        report.revision_num = current.revision_num
+        self._validate_report(report)
+        self.report_queue.replace_first(report)
+        return report
+    
+    def discard_next_report(self) -> Report:
+        """Discard only the FIFO head, leaving its event unchanged."""
+        if self.report_queue.is_empty():
+            raise ValueError("No hay reportes pendientes en la cola")
+        return self.report_queue.dequeue()
 
     def clear_report_queue(self) -> int:
         """Discard all pending reports and return how many there were.

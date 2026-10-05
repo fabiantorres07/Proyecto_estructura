@@ -1,3 +1,4 @@
+from typing import Literal
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, field_validator
@@ -78,3 +79,29 @@ class ReportQueueCleared(BaseModel):
     """Respuesta al vaciar la cola: cuántos reportes se descartaron."""
 
     removed: int
+    
+    
+class ReportReviewEvent(BaseModel):
+    event_id: int
+    magnitude: float
+    depth: float
+    x: float
+    y: float
+    occurred_at: datetime
+    revision: int
+    stations: list[str]
+    attention_status: Literal["pending", "reviewed"]
+    is_in_populated_zone: bool
+    priority: int
+    
+    
+class ReportReviewResponse(BaseModel):
+    report: ReportResponse
+    current_event_status: Literal["new", "active", "archived", "deleted"]
+    current_event: ReportReviewEvent | None
+    
+    
+class ReportProcessedResponse(BaseModel):
+    case: str
+    event_id: int
+    revision_num: int

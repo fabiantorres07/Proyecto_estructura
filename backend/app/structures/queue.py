@@ -19,6 +19,11 @@ class Queue:
 
     def peek(self):
         return self._items[0]
+    
+    def replace_first(self, item):
+        if self.is_empty():
+            raise IndexError("Cannot replace the front of an empty queue")
+        self._items[0] = item
 
     def is_empty(self):
         return len(self._items) == 0

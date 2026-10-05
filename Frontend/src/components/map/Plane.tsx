@@ -3,7 +3,7 @@ import { Stage, Layer, Line, Text, Circle, Group, Label, Tag } from "react-konva
 import MapZone from "./MapZone";
 import MapStation from "./MapStation";
 import { Station } from "../../models/Station";
-import { Event as MapEventData } from "../../models/Event/Event";
+import { EventMapPoint } from "../../models/Event/EventMapPoint";
 import { Zone } from "../../models/Zone";
 
 const GRID_SIZE = 10;
@@ -19,7 +19,9 @@ interface CartesianPlaneProps {
   selectedZone?: Zone | null;
   stations?: Station[];
   selectedStation?: Station | null;
-  events?: MapEventData[];
+  events?: EventMapPoint[];
+  highlightedEventId?: number | null;
+  highlightedStationIds?: string[];
 }
 
 function CartesianPlane({
@@ -28,6 +30,8 @@ function CartesianPlane({
   stations = [],
   selectedStation = null,
   events = [],
+  highlightedEventId = null,
+  highlightedStationIds = [],
 }: CartesianPlaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredMarker, setHoveredMarker] = useState<string | null>(null);
@@ -203,7 +207,8 @@ function CartesianPlane({
                 selected={
                   selectedStation === station ||
                   (selectedStation?.station_id != null &&
-                    selectedStation.station_id === station.station_id)
+                    selectedStation.station_id === station.station_id) ||
+                  (station.station_id != null && highlightedStationIds.includes(station.station_id))
                 }
               />
             );
@@ -213,6 +218,7 @@ function CartesianPlane({
             const markerKey = `event-${mapEvent.event_id}`;
             const x = mapCoordinate(mapEvent.x);
             const y = originY - (mapEvent.y / (GRID_SIZE * GRID_STEP_KM)) * (GRID_SIZE * CELL_SIZE);
+            const highlighted = highlightedEventId === mapEvent.event_id;
 
             return (
               <Group
@@ -229,16 +235,16 @@ function CartesianPlane({
                 <Circle
                   x={x}
                   y={y}
-                  radius={8}
-                  fill="#ef4444"
-                  stroke="#991b1b"
-                  strokeWidth={2}
+                  radius={highlighted ? 12 : 8}
+                  fill={highlighted ? "#f59e0b" : "#ef4444"}
+                  stroke={highlighted ? "#92400e" : "#991b1b"}
+                  strokeWidth={highlighted ? 3 : 2}
                 />
                 {hoveredMarker === markerKey && (
                   <Label x={x + 10} y={y - 28}>
                     <Tag fill="black" cornerRadius={5} />
                     <Text
-                      text={mapEvent.event_id}
+                      text={String(mapEvent.event_id)}
                       fill="white"
                       padding={8}
                       fontSize={14}

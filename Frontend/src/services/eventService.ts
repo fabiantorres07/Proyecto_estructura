@@ -15,6 +15,11 @@ class EventService {
         return response.data;
     }
 
+    async getActiveEvents(): Promise<EventApiResponse[]> {
+        const response = await axios.get<EventApiResponse[]>(`${API_URL}/active`);
+        return response.data;
+    }
+
     async getEvent(eventId: number | string): Promise<EventApiResponse> {
         const response = await axios.get<EventApiResponse>(`${API_URL}/${eventId}`);
         return response.data;

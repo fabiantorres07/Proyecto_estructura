@@ -159,6 +159,11 @@ def list_all_events(scenario: Scenario = Depends(get_scenario)):
     return sorted(rows, key=lambda row: row["event_id"])
 
 
+@router.get("/active", response_model=list[EventResponse])
+def list_active_events(scenario: Scenario = Depends(get_scenario)):
+    return [_event_response(event) for event in scenario.avl_tree.inorder()]
+
+
 @router.get("/queries/pending", response_model=EventQueryResponse)
 def query_pending_events(
     k: int = Query(gt=0),
