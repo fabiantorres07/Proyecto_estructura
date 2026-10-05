@@ -164,11 +164,21 @@ const Header = (props: {
         mass_archive: 'archivo masivo',
         global_recovery: 'recuperación global',
         load: 'carga de escenario',
+        report_queue_clear: 'limpieza de la cola de reportes',
+        zone_create: 'creación de zona',
+        zone_update: 'actualización de zona',
+        zone_delete: 'eliminación de zona',
+        station_create: 'creación de estación',
+        station_update: 'actualización de estación',
+        station_delete: 'eliminación de estación',
       };
       const target = result.event_id != null
         ? ` · SIS-${result.event_id}`
         : result.parameter ? ` · ${result.parameter}`
-          : result.root_id != null ? ` · raíz SIS-${result.root_id}` : '';
+          : result.root_id != null ? ` · raíz SIS-${result.root_id}`
+            : result.zone_name ? ` · ${result.zone_name}`
+              : result.station_id ? ` · ${result.station_id}`
+                : result.removed != null ? ` · ${result.removed} reportes restaurados` : '';
       await Swal.fire({
         title: 'Acción deshecha',
         text: `${descriptions[result.undone] ?? result.undone}${target}`,

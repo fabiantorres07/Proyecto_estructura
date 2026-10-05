@@ -38,7 +38,7 @@ const ReportQueue: React.FC = () => {
         if (queue.length === 0) return;
         const confirmation = await Swal.fire({
             title: "Limpiar cola de reportes",
-            text: `Se descartarán ${queue.length} reportes. Esta acción no se puede deshacer.`,
+            text: `Se descartarán ${queue.length} reportes. Podrás restaurarlos con Deshacer.`,
             icon: "warning",
             showCancelButton: true,
             confirmButtonText: "Limpiar cola",

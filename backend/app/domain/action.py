@@ -1,4 +1,6 @@
 from app.domain.event import Event, AttentionStatus
+from app.domain.zone import Zone
+from app.domain.station import Station
 from app.structures.avl_node import AVLNode
 from app.structures.avl_tree import AVLTopologySnapshot
 from datetime import datetime
@@ -370,7 +372,7 @@ class QueueStepAction:
         report: Report,
         queue_position: int,
         inner_action: Optional[CreationAction | CorrectionAction | ReactivationAction] = None,
-        confirmed_station_id: Optional[int] = None,
+        confirmed_station_id: Optional[str] = None,
         counter_delta: Optional[dict[str, int]] = None,
     ):
         self.report = report
@@ -381,3 +383,24 @@ class QueueStepAction:
         # (conflicto o reporte descartado). Una corrección o reactivación
         # interna guarda su conteo en inner_action, no aquí.
         self.counter_delta = counter_delta or {}
+
+
+class ClearReportQueueAction:
+    def __init__(self, reports: list[Report]):
+        self.reports = reports
+
+
+class ZoneAction:
+    def __init__(self, operation: str, old_zone: Optional[Zone], new_zone: Optional[Zone], index: int):
+        self.operation = operation
+        self.old_zone = old_zone
+        self.new_zone = new_zone
+        self.index = index
+
+
+class StationAction:
+    def __init__(self, operation: str, old_station: Optional[Station], new_station: Optional[Station], index: int):
+        self.operation = operation
+        self.old_station = old_station
+        self.new_station = new_station
+        self.index = index

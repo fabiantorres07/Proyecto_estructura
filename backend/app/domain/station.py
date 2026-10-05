@@ -4,7 +4,7 @@ Lo único especial son __eq__ y __hash__. Con ellos, dos estaciones con el mismo
 
 class Station:
 
-    def __init__(self, station_id, x, y):
+    def __init__(self, station_id: str, x: float, y: float):
         self.station_id = station_id
         self.x = x
         self.y = y

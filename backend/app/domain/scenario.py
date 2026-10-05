@@ -14,7 +14,8 @@ from app.structures.queue import Queue
 from app.domain.action import (
     CreationAction, CorrectionAction, AttentionChangeAction, DeletionAction,
     ParameterChangeAction, ClockAdvanceAction, QueueStepAction, MassArchiveAction,
-    GlobalRecoveryAction, LoadAction, ReactivationAction
+    GlobalRecoveryAction, LoadAction, ReactivationAction, ClearReportQueueAction,
+    ZoneAction, StationAction,
 )
 from app.structures.avl_tree import AVLTree, ROTATION_METRIC_KEYS, AVLTopologySnapshot
 from app.structures.avl_node import AVLNode
@@ -47,7 +48,7 @@ INFRASTRUCTURE: Methods that are important for the project but are not specific 
 class Scenario:
 
     def __init__(self, metrics : Optional[dict[str, int]] = None,avl_tree: Optional[AVLTree] = None, bst_tree: Optional[BSTTree] = None, 
-                 event_index : Optional[dict[int, AVLNode]] = None, stations : Optional[dict[int, Station]] = None, zones: Optional[list[Zone]] = None, 
+                 event_index : Optional[dict[int, AVLNode]] = None, stations : Optional[dict[str, Station]] = None, zones: Optional[list[Zone]] = None, 
                  eliminated_IDs: Optional[set[int]] = None, archived_history: Optional[dict[int, Event]] = None, referenced_by=None, simulation_clock: Optional[datetime] = None, 
                 L: int=3, W: float = 48.0, R: float = 40.0, T: float = 72.0, mode: Mode = Mode.NORMAL, undo_stack: Optional[Stack] = None, report_queue: Optional[Queue] = None, versions: Optional[dict[str, dict]] = None):
 
@@ -356,7 +357,9 @@ class Scenario:
         if any(existing.name == zone.name for existing in self.zones):
             raise ValueError("A zone with this name already exists")
 
+        index = len(self.zones)
         self.zones.append(zone)
+        self.undo_stack.push(ZoneAction("create", None, zone, index))
         return zone
 
     def get_zone(self, zone_name: str) -> Zone:
@@ -402,6 +405,7 @@ class Scenario:
         updated_zone = Zone(**updated_values)
         zone_index = self.zones.index(current_zone)
         self.zones[zone_index] = updated_zone
+        self.undo_stack.push(ZoneAction("update", current_zone, updated_zone, zone_index))
         return updated_zone
 
     def delete_zone(self, zone_name: str) -> None:
@@ -410,7 +414,9 @@ class Scenario:
         self._check_zones_and_stations_are_fixed()
 
         zone = self.get_zone(zone_name)
+        zone_index = self.zones.index(zone)
         self.zones.remove(zone)
+        self.undo_stack.push(ZoneAction("delete", zone, None, zone_index))
 
 
     """==============================================="""
@@ -426,7 +432,9 @@ class Scenario:
         if station.station_id in self.stations:
             raise ValueError("A station with this ID already exists")
 
+        index = len(self.stations)
         self.stations[station.station_id] = station
+        self.undo_stack.push(StationAction("create", None, station, index))
         return station
 
     def get_station(self, station_id: str) -> Station:
@@ -464,10 +472,12 @@ class Scenario:
         ):
             raise ValueError("A station with this id already exists")
 
+        station_index = list(self.stations).index(station_id)
         updated_station = Station(**updated_values)
         if updated_station.station_id != station_id:
             del self.stations[station_id]
         self.stations[updated_station.station_id] = updated_station
+        self.undo_stack.push(StationAction("update", current_station, updated_station, station_index))
         return updated_station
 
     def delete_station(self, station_id: str) -> None:
@@ -475,8 +485,10 @@ class Scenario:
         events (see _check_zones_and_stations_are_fixed)."""
         self._check_zones_and_stations_are_fixed()
 
-        self.get_station(station_id)
+        station = self.get_station(station_id)
+        station_index = list(self.stations).index(station_id)
         del self.stations[station_id]
+        self.undo_stack.push(StationAction("delete", station, None, station_index))
 
 
     """==============================================="""
@@ -589,26 +601,14 @@ class Scenario:
 
     def clear_report_queue(self) -> int:
         """Discard all pending reports and return how many there were.
-        Does not touch events, trees, or the clock.
-
-        Team decision (documented): this operation is NOT recorded on the
-        undo stack.
-
-        Why: section 13 lists the actions that must be undoable (create,
-        correct, delete, mass archive, parameter change, clock advance,
-        attention change, load, global recovery and each queue step).
-        "Clear the queue" is NOT in that list. The statement also says
-        the queue is part of the recoverable state, but only in the
-        context of saving/restoring versions, not as a standalone
-        undoable action.
-
-        So we follow the explicit list in section 13. The state changes
-        (the queue is emptied), but there is no way back via undo(); the
-        user would have to use a saved version if they want the reports
-        back.
-
-        If the queue is already empty, nothing happens (returns 0)."""
-        return self.report_queue.clear()
+        Does not touch events, trees, or the clock. A snapshot of the FIFO
+        queue is recorded so undo can restore the reports in their original
+        order. If the queue is empty, nothing is recorded and 0 is returned."""
+        reports = self.report_queue.items()
+        removed = self.report_queue.clear()
+        if removed:
+            self.undo_stack.push(ClearReportQueueAction(reports))
+        return removed
 
 
     def process_next_report(self) -> dict:
@@ -1845,12 +1845,54 @@ class Scenario:
             return self._undo_global_recovery(action)
         elif isinstance(action, LoadAction):
             return self._undo_load(action)
+        elif isinstance(action, ClearReportQueueAction):
+            return self._undo_clear_report_queue(action)
+        elif isinstance(action, ZoneAction):
+            return self._undo_zone_change(action)
+        elif isinstance(action, StationAction):
+            return self._undo_station_change(action)
         else:
             # Unknown action: push it back so it is not lost.
             self.undo_stack.push(action)
             raise NotImplementedError(
                 f"undo() no sabe deshacer {type(action).__name__}"
             )
+
+    def _undo_clear_report_queue(self, action: ClearReportQueueAction) -> dict:
+        self.report_queue.clear()
+        for report in action.reports:
+            self.report_queue.enqueue(report)
+        return {"undone": "report_queue_clear", "removed": len(action.reports)}
+
+    def _undo_zone_change(self, action: ZoneAction) -> dict:
+        if action.operation == "create":
+            assert action.new_zone is not None
+            zone = action.new_zone
+            self.zones.remove(zone)
+        elif action.operation == "update":
+            assert action.old_zone is not None and action.new_zone is not None
+            self.zones[action.index] = action.old_zone
+            zone = action.new_zone
+        else:
+            assert action.old_zone is not None
+            self.zones.insert(action.index, action.old_zone)
+            zone = action.old_zone
+        return {"undone": f"zone_{action.operation}", "zone_name": zone.name}
+
+    def _undo_station_change(self, action: StationAction) -> dict:
+        if action.operation == "create":
+            assert action.new_station is not None
+            del self.stations[action.new_station.station_id]
+            station = action.new_station
+        else:
+            if action.new_station is not None:
+                self.stations.pop(action.new_station.station_id, None)
+            assert action.old_station is not None
+            station = action.old_station
+            items = list(self.stations.items())
+            items.insert(action.index, (station.station_id, station))
+            self.stations = dict(items)
+        return {"undone": f"station_{action.operation}", "station_id": station.station_id}
 
 
     def _undo_creation(self, action: CreationAction) -> dict:
