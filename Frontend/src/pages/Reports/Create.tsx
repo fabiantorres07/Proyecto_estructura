@@ -9,13 +9,17 @@ import Breadcrumb from '../../components/Breadcrumb';
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from 'react';
 import { getApiErrorMessage } from '../../utils/utils';
+import { SCENARIO_STATE_CHANGED_EVENT } from '../../services/undoService';
 
 
 const CreateReport = () => {
     const navigate = useNavigate();
     const [stations, setStations] = useState<Station[]>([]);
     useEffect(() => {
-        fetchData();
+        const refreshStations = () => void fetchData();
+        void fetchData();
+        window.addEventListener(SCENARIO_STATE_CHANGED_EVENT, refreshStations);
+        return () => window.removeEventListener(SCENARIO_STATE_CHANGED_EVENT, refreshStations);
     }, []);
 
     const fetchData = async () => {

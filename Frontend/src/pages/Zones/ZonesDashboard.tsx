@@ -6,6 +6,7 @@ import GenericTable from "../../components/GenericTable";
 import Swal from "sweetalert2";
 import CartesianPlane from "../../components/map/Plane";
 import { getApiErrorMessage } from "../../utils/utils";
+import { SCENARIO_STATE_CHANGED_EVENT } from "../../services/undoService";
 
 const ZonesDashboard: React.FC = () => {
     const [zones, setZones] = useState<Zone[]>([]);
@@ -13,7 +14,14 @@ const ZonesDashboard: React.FC = () => {
     const [currentMode, setCurrentMode] = useState(1); //1 = create, 2 = edit
 
     useEffect(() => {
-        fetchData();
+        const refreshZones = () => {
+            void fetchData();
+            setSelectedZone(null);
+            setCurrentMode(1);
+        };
+        void fetchData();
+        window.addEventListener(SCENARIO_STATE_CHANGED_EVENT, refreshZones);
+        return () => window.removeEventListener(SCENARIO_STATE_CHANGED_EVENT, refreshZones);
     }, []);
 
     const fetchData = async () => {

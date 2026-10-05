@@ -6,6 +6,7 @@ import StationFormValidator from "../../components/stations/StationFormValidator
 import { getApiErrorMessage } from "../../utils/utils";
 import CartesianPlane from "../../components/map/Plane";
 import { stationService } from "../../services/stationService";
+import { SCENARIO_STATE_CHANGED_EVENT } from "../../services/undoService";
 
 const StationsDashboard: React.FC = () => {
     const [stations, setStations] = useState<Station[]>([]);
@@ -13,7 +14,14 @@ const StationsDashboard: React.FC = () => {
     const [currentMode, setCurrentMode] = useState(1); //1 = create, 2 = edit
 
     useEffect(() => {
-        fetchData();
+        const refreshStations = () => {
+            void fetchData();
+            setSelectedStation(null);
+            setCurrentMode(1);
+        };
+        void fetchData();
+        window.addEventListener(SCENARIO_STATE_CHANGED_EVENT, refreshStations);
+        return () => window.removeEventListener(SCENARIO_STATE_CHANGED_EVENT, refreshStations);
     }, []);
 
     const fetchData = async () => {

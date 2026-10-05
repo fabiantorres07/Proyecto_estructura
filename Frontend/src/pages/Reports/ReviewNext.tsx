@@ -11,6 +11,7 @@ import { Zone } from "../../models/Zone";
 import { reportService } from "../../services/reportService";
 import { stationService } from "../../services/stationService";
 import { zoneService } from "../../services/zoneService";
+import { SCENARIO_STATE_CHANGED_EVENT } from "../../services/undoService";
 import { getApiErrorMessage } from "../../utils/utils";
 
 const ReportReviewNext = () => {
@@ -45,6 +46,8 @@ const ReportReviewNext = () => {
 
     useEffect(() => {
         void loadReview();
+        window.addEventListener(SCENARIO_STATE_CHANGED_EVENT, loadReview);
+        return () => window.removeEventListener(SCENARIO_STATE_CHANGED_EVENT, loadReview);
     }, [loadReview]);
 
     const updateReport = async (values: ReportFormValues) => {

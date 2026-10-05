@@ -14,6 +14,7 @@ import { Zone } from "../../models/Zone";
 import { eventService } from "../../services/eventService";
 import { stationService } from "../../services/stationService";
 import { zoneService } from "../../services/zoneService";
+import { SCENARIO_STATE_CHANGED_EVENT } from "../../services/undoService";
 import { getApiErrorMessage } from "../../utils/utils";
 
 const EventDetail = () => {
@@ -65,7 +66,12 @@ const EventDetail = () => {
             }
         };
         void loadEvent();
-        return () => { active = false; };
+        const refreshEvent = () => void loadEvent();
+        window.addEventListener(SCENARIO_STATE_CHANGED_EVENT, refreshEvent);
+        return () => {
+            active = false;
+            window.removeEventListener(SCENARIO_STATE_CHANGED_EVENT, refreshEvent);
+        };
     }, [eventId, navigate]);
 
     const markReviewed = async (values: Event | EventApiResponse) => {

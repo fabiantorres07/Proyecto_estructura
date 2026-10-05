@@ -3,6 +3,7 @@ import { Report } from "../models/Report/Report";
 import { ReportFormValues } from "../models/Report/ReportFormValues";
 import { ReportReviewResponse } from "../models/Report/ReportReviewResponse";
 import { ReportProcessedResponse } from "../models/Report/ReportProcessedResponse";
+import { SCENARIO_STATE_CHANGED_EVENT } from "./undoService";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/reports`;
 
@@ -20,6 +21,14 @@ class ReportService {
             console.error("Error al obtener cola de reportes:", error);
             throw error;
         }
+    }
+
+    async clearQueue(): Promise<number> {
+        const response = await axios.delete<{ removed: number }>(API_URL);
+        if (typeof window !== "undefined") {
+            window.dispatchEvent(new Event(SCENARIO_STATE_CHANGED_EVENT));
+        }
+        return response.data.removed;
     }
 
     async getReport(event_id: string, revision_number: string): Promise<ReportFormValues | null> {

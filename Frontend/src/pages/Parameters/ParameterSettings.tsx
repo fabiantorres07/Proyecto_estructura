@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { GlobalParameters } from "../../models/Parameters/GlobalParameters";
 import { parametersService } from "../../services/parametersService";
+import { SCENARIO_STATE_CHANGED_EVENT } from "../../services/undoService";
 
 const descriptions = {
     L: "Máxima profundidad del árbol para definir un acceso como costoso.",
@@ -19,7 +20,9 @@ const ParameterSettings = () => {
 
     useEffect(() => {
         let active = true;
-        parametersService.getParameters()
+        const loadParameters = () => {
+            setLoading(true);
+            parametersService.getParameters()
             .then((data) => {
                 if (active) setParameters(data);
             })
@@ -29,7 +32,13 @@ const ParameterSettings = () => {
             .finally(() => {
                 if (active) setLoading(false);
             });
-        return () => { active = false; };
+        };
+        loadParameters();
+        window.addEventListener(SCENARIO_STATE_CHANGED_EVENT, loadParameters);
+        return () => {
+            active = false;
+            window.removeEventListener(SCENARIO_STATE_CHANGED_EVENT, loadParameters);
+        };
     }, []);
 
     const updateValue = (name: keyof GlobalParameters, value: number) => {
