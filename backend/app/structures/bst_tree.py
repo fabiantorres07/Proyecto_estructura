@@ -188,6 +188,37 @@ class BSTTree:
         return node, minimum
 
     # ------------------------------------------------------------------
+    # Copia de la topología (para deshacer, sección 13)
+    # ------------------------------------------------------------------
+
+    def snapshot_topology(self):
+        """Copia de la FORMA del BST, igual que AVLTree.snapshot_topology:
+        por cada nodo guarda a qué nodos apuntaban sus enlaces. No copia
+        eventos ni crea nodos. Devuelve (raíz, tamaño, enlaces), con enlaces
+        = lista de (nodo, left_son, right_son). Costo y memoria: O(n)."""
+        links = []
+        self._collect_links(self.root, links)
+        return (self.root, self._size, links)
+
+    def _collect_links(self, node, links):
+        if node is None:
+            return
+        links.append((node, node.left_son, node.right_son))
+        self._collect_links(node.left_son, links)
+        self._collect_links(node.right_son, links)
+
+    def restore_topology(self, snapshot):
+        """Devuelve el BST exactamente a la forma de `snapshot`. Solo es
+        correcto si desde la copia no se hicieron otras modificaciones que
+        sigan vigentes; la pila de deshacer (LIFO) lo garantiza. O(n)."""
+        root, size, links = snapshot
+        for node, left_son, right_son in links:
+            node.left_son = left_son
+            node.right_son = right_son
+        self.root = root
+        self._size = size
+
+    # ------------------------------------------------------------------
     # Métricas estructurales para la comparación con el AVL
     # ------------------------------------------------------------------
 

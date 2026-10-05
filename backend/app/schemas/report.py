@@ -36,18 +36,27 @@ class ReportCreate(BaseModel):
       - revision < current                     -> old
     If the backend always computed "current + 1", every report would land
     as a correction and the other cases would never trigger.
+
+    It is OPTIONAL: if the client does not send it, the router fills it
+    with Scenario.next_report_revision() as a suggestion (the next
+    revision after the queued reports or the current event). If the
+    client sends it, it is respected as is. This keeps forms that do not
+    have a revision field working, without forcing every report into the
+    correction case when the field IS sent.
     """
 
     event_id: int = Field(ge=1, le=999999)
-    revision_num: int = Field(ge=1)
+    revision_num: int | None = Field(default=None, ge=1)
     station_id: str = Field(min_length=1)
     magnitude: float = Field(ge=-2.0, le=10.0, allow_inf_nan=False)
     depth: float = Field(ge=0.0, le=700.0, allow_inf_nan=False)
     x: float = Field(ge=0.0, le=1000.0, allow_inf_nan=False)
     y: float = Field(ge=0.0, le=1000.0, allow_inf_nan=False)
-    occurred_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc).replace(microsecond=0)
-    )
+    # Optional. If it is not sent, the router uses the current SIMULATION
+    # clock (not the computer's clock): the simulation clock only moves by
+    # user action, so "now" in real time would usually be later than it and
+    # the report would be rejected.
+    occurred_at: datetime | None = None
 
     @field_validator("magnitude", "depth", "x", "y")
     @classmethod
@@ -60,6 +69,8 @@ class ReportCreate(BaseModel):
         """Requires timezone, requires second precision, normalizes to UTC.
         Storing always in UTC makes the "same data" comparison (section 6)
         independent of the input format."""
+        if value is None:
+            return None
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("occurred_at must include a timezone")
         if value.microsecond != 0:

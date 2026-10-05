@@ -11,6 +11,7 @@ from app.api.parameters import router as parameters_router
 from app.api.scenario import router as scenario_router
 from app.api.trees import router as trees_router
 from app.api.indicators import router as indicators_router
+from app.api.versions import router as versions_router
 
 app = FastAPI()
 
@@ -37,6 +38,7 @@ app.include_router(parameters_router)
 app.include_router(scenario_router)
 app.include_router(trees_router)
 app.include_router(indicators_router)
+app.include_router(versions_router)
 
 @app.get("/")
 def read_root():

@@ -1,6 +1,5 @@
 from enum import Enum
 from datetime import datetime, timedelta, timezone
-from time import monotonic
 from typing import Optional
 import math
 from app.domain.zone import Zone
@@ -28,9 +27,12 @@ from app.structures.bst_tree import BSTTree
 # resta lo que sumó (counter_delta), igual que rotation_delta.
 #   corrections_accepted: correcciones aplicadas (manuales, por reporte y
 #                         reactivaciones de archivados).
-#   reports_discarded:    reportes rechazados al procesar la cola (antiguo,
-#                         id eliminado, archivado no reactivado).
-#   conflicts:            reportes con igual revisión y datos distintos.
+#   reports_discarded:    reportes rechazados al procesar la cola por
+#                         antiguos (activo o archivado) o por id eliminado.
+#   conflicts:            reportes con igual revisión y datos distintos,
+#                         sobre un evento activo o archivado.
+#                         (Una confirmación, activa o archivada, no cuenta:
+#                         el reporte se acepta.)
 #   mass_archives:        archivos masivos ejecutados.
 #   archived_events:      eventos enviados al histórico por archivos masivos
 #                         (acumulado; los archivados actuales son
@@ -53,11 +55,11 @@ class Scenario:
         self.eliminated_IDs = eliminated_IDs if eliminated_IDs is not None else set()
         self.archived_history = archived_history if archived_history is not None else dict()
 
-        # Simulation clock, second precision. If none is provided, use the
-        # current system UTC time.
+        # Simulation clock, second precision. If none is provided, start at
+        # the current system UTC time. From then on it does NOT move by
+        # itself: it only changes through update_simulation_clock (user
+        # action, section 3), undo, or loading a scenario/version.
         self._simulation_clock: datetime = simulation_clock or datetime.now(timezone.utc).replace(microsecond=0)
-        # Store a fixed baseline and measure elapsed time monotonically so wall-clock adjustments do not stop or reverse the simulation clock.
-        self._clock_anchor_monotonic = monotonic()
 
         # Configurable global parameters.
         self.L = L  # Depth limit, initially 3
@@ -100,6 +102,54 @@ class Scenario:
         for counter_key, amount in delta.items():
             self.metrics[counter_key] = self.metrics.get(counter_key, 0) + amount
 
+    # FOTO DE LOS ÁRBOLES PARA DESHACER (sección 13)
+    #
+    # Deshacer debe recuperar el estado exacto, incluida la topología. Volver
+    # a insertar o eliminar al deshacer NO basta: las rotaciones pueden dejar
+    # el árbol con otra forma y sumarían métricas de más. Por eso cada
+    # operación que cambia los árboles (crear, corregir, reactivar, eliminar,
+    # archivar) toma una foto ANTES de tocarlos y la guarda en su acción, y
+    # deshacer pone esa foto de vuelta. Es el mismo mecanismo que ya usaba la
+    # recuperación global (GlobalRecoveryAction).
+    #
+    # Memoria: O(n) referencias por acción (5 por nodo del AVL y 3 por nodo
+    # del BST), sin copiar eventos ni crear nodos. Con ~100 eventos es poco,
+    # y a cambio deshacer es exacto y O(n).
+
+    def _tree_checkpoint(self) -> dict:
+        """AUXILIAR: foto de la forma del AVL y del BST y de las métricas de
+        rotación, tomada ANTES de modificar los árboles."""
+        return {
+            "avl": self.avl_tree.snapshot_topology(),
+            "bst": self.bst_tree.snapshot_topology(),
+            "rotations_before": {k: self.metrics.get(k, 0) for k in ROTATION_METRIC_KEYS},
+        }
+
+    def _close_tree_checkpoint(self, checkpoint: dict) -> dict:
+        """AUXILIAR: completa la foto, DESPUÉS de modificar los árboles, con
+        lo que la operación sumó a las métricas de rotación. Se calcula por
+        diferencia porque una corrección hace delete + insert y cada una
+        reinicia last_rotations."""
+        before = checkpoint["rotations_before"]
+        checkpoint["rotation_delta"] = {
+            k: self.metrics.get(k, 0) - before[k] for k in ROTATION_METRIC_KEYS
+        }
+        return checkpoint
+
+    def _restore_tree_checkpoint(self, checkpoint: dict, event_ids=()) -> None:
+        """AUXILIAR: devuelve el AVL y el BST a la forma de la foto, resta
+        las rotaciones que sumó la operación y vuelve a apuntar event_index
+        de `event_ids` a sus nodos ORIGINALES (los de la foto; una corrección
+        o una eliminación los había sacado del árbol)."""
+        self.avl_tree.restore_topology(checkpoint["avl"])
+        self.bst_tree.restore_topology(checkpoint["bst"])
+        self.avl_tree.revert_rotation_metrics(checkpoint.get("rotation_delta", {}))
+        if event_ids:
+            wanted = set(event_ids)
+            for node, *_ in checkpoint["avl"].links:
+                if node.event.event_id in wanted:
+                    self.event_index[node.event.event_id] = node
+
     def _revert_counters(self, delta: dict) -> None:
         """AUXILIAR: resta el delta que guardó una acción (al deshacer)."""
         for counter_key, amount in delta.items():
@@ -130,13 +180,16 @@ class Scenario:
     """==============================================="""
     @property
     def simulation_clock(self) -> datetime:
-        elapsed_seconds = monotonic() - self._clock_anchor_monotonic
-        return self._simulation_clock + timedelta(seconds=elapsed_seconds)
+        """Reloj de simulación. Es un valor FIJO (sección 3: "su avance se
+        realiza por una acción del usuario"): no avanza con el tiempo real.
+        Así la antigüedad de los eventos, las ramas archivables y un
+        escenario guardado no cambian solos mientras el programa está
+        abierto."""
+        return self._simulation_clock
 
     @simulation_clock.setter
     def simulation_clock(self, value: datetime) -> None:
         self._simulation_clock = value
-        self._clock_anchor_monotonic = monotonic()
 
     def update_simulation_clock(self, new_clock: datetime) -> datetime:
         new_clock = self._as_utc(new_clock)
@@ -169,8 +222,8 @@ class Scenario:
                     f"Cannot set the clock before report {report.event_id}"
                 )
 
-        # Save the current simulation clock (including the elapsed real
-        # time) BEFORE changing it, so undo can return to this exact instant.
+        # Save the current simulation clock BEFORE changing it, so undo can
+        # return to this exact instant.
         old_clock = self.simulation_clock
 
         # Apply the new clock.
@@ -731,9 +784,9 @@ class Scenario:
         # reactivaciones ya se contaron dentro de correct_event /
         # archived_reactivation (y su delta viaja en inner_action).
         counter_delta = {}
-        if case == "conflict":
+        if case in ("conflict", "archived_conflict"):
             counter_delta["conflicts"] = 1
-        elif case in ("old", "eliminated", "archived_not_reactivated"):
+        elif case in ("old", "eliminated"):
             counter_delta["reports_discarded"] = 1
         self._add_counters(counter_delta)
 
@@ -793,9 +846,12 @@ class Scenario:
 
         balance = (self.mode == Mode.NORMAL)
 
+        # Foto de los árboles ANTES de insertar (para deshacer exacto).
+        checkpoint = self._tree_checkpoint()
         node = self.avl_tree.insert(event, balance=balance)
         self.bst_tree.insert(event)
         self.event_index[event_id] = node
+        self._close_tree_checkpoint(checkpoint)
 
         # Look for existing events that could now have B as a new candidate
         # (section 7). An event X can only have B as a candidate if B occurred
@@ -825,7 +881,7 @@ class Scenario:
 
         # Push the action with B's id and the snapshot of old references, so
         # undo() can restore everything this creation changed.
-        self.undo_stack.push(CreationAction(event_id, old_references))
+        self.undo_stack.push(CreationAction(event_id, old_references, tree_checkpoint=checkpoint))
 
         return event
 
@@ -947,12 +1003,15 @@ class Scenario:
             # the new one. event_index is updated with the NEW node.
             balance = (self.mode == Mode.NORMAL)
 
+            # Foto de los árboles ANTES de reubicar (para deshacer exacto).
+            checkpoint = self._tree_checkpoint()
             if old_key != new_key:
                 self.avl_tree.delete(old_key, balance=balance)
                 self.bst_tree.delete(old_key)
                 new_node = self.avl_tree.insert(event, balance=balance)
                 self.bst_tree.insert(event)
                 self.event_index[event_id] = new_node
+            self._close_tree_checkpoint(checkpoint)
 
             # 7. Group 1: other events that could have gained or lost this event
             # as a new candidate. The RANGE between the old and the new value is
@@ -1010,6 +1069,7 @@ class Scenario:
                 old_attention_status=old_attention_status,
                 old_references=old_references,
                 counter_delta=counter_delta,
+                tree_checkpoint=checkpoint,
             ))
 
             # 12. Return the corrected event.
@@ -1084,9 +1144,12 @@ class Scenario:
             # between these three does not matter: we already have `event` saved
             # in a variable, we do not depend on it being in any of them.
             balance = (self.mode == Mode.NORMAL)
+            # Foto de los árboles ANTES de eliminar (para deshacer exacto).
+            checkpoint = self._tree_checkpoint()
             self.avl_tree.delete(key, balance=balance)
             self.bst_tree.delete(key)
             del self.event_index[event_id]
+            self._close_tree_checkpoint(checkpoint)
 
             # Register the id as eliminated. This is what prevents a later report
             # from reactivating it (section 'Individual deletion').
@@ -1108,7 +1171,7 @@ class Scenario:
 
             # 6. Push the action: the complete event (to reinsert it as-is when
             # undoing) and the old references of all affected events.
-            self.undo_stack.push(DeletionAction(event, old_references))
+            self.undo_stack.push(DeletionAction(event, old_references, tree_checkpoint=checkpoint))
 
             # 7. Return the event already deleted (the saved one, not the one from
             # the structure).
@@ -1181,9 +1244,12 @@ class Scenario:
 
         # 5. Insert into AVL and BST (creation, not relocation).
         balance = (self.mode == Mode.NORMAL)
+        # Foto de los árboles ANTES de insertar (para deshacer exacto).
+        checkpoint = self._tree_checkpoint()
         node = self.avl_tree.insert(event, balance=balance)
         self.bst_tree.insert(event)
         self.event_index[event_id] = node
+        self._close_tree_checkpoint(checkpoint)
 
         # 6. Recalculate references. Same scheme as correct_event:
         # Group 1 (could now have it as a new candidate, with old-new range)
@@ -1235,6 +1301,7 @@ class Scenario:
             old_attention_status=old_attention_status,
             old_references=old_references,
             counter_delta=counter_delta,
+            tree_checkpoint=checkpoint,
         ))
 
         # 8. Return the reactivated event.
@@ -1555,6 +1622,8 @@ class Scenario:
 
         # 3. Detach. In normal mode it rotates; in stress mode, it does not.
         balance = (self.mode == Mode.NORMAL)
+        # Foto de los árboles ANTES de desprender (para deshacer exacto).
+        checkpoint = self._tree_checkpoint()
         archived_root, former_parent, was_left_child = self.avl_tree.detach_subtree(
             node, balance=balance
         )
@@ -1570,6 +1639,7 @@ class Scenario:
             self.archived_history[event.event_id] = event
             del self.event_index[event.event_id]
         # NOTE: reference_id and referenced_by are NOT touched (associations).
+        self._close_tree_checkpoint(checkpoint)
 
         # Contadores de la sección 14: un archivo masivo más y los eventos
         # que se fueron al histórico.
@@ -1584,6 +1654,7 @@ class Scenario:
             event_ids=event_ids,
             rotation_delta=rotation_delta,
             counter_delta=counter_delta,
+            tree_checkpoint=checkpoint,
         ))
 
         return {
@@ -1736,12 +1807,17 @@ class Scenario:
         _find_any_event fallaría. Solo se restauran los OTROS.
         """
         event_id = action.event_id
-        node = self.event_index[event_id]
-        event = node.event
+        event = self.event_index[event_id].event
 
-        balance = (self.mode == Mode.NORMAL)
-        self.avl_tree.delete(event.key, balance=balance)
-        self.bst_tree.delete(event.key)
+        # El evento creado sale del índice inverso: si se le había asignado
+        # una referencia, referenced_by[referencia] lo seguiría nombrando y
+        # quedaría apuntando a un evento que ya no existe.
+        self._assign_reference(event, None)
+
+        # Los árboles vuelven a la forma exacta de antes de insertar (el nodo
+        # nuevo no está en la foto, así que queda fuera) y se restan las
+        # rotaciones que causó la inserción.
+        self._restore_tree_checkpoint(action.tree_checkpoint)
         del self.event_index[event_id]
 
         for other_id, old_ref in action.old_references.items():
@@ -1762,8 +1838,6 @@ class Scenario:
         node = self.event_index[event_id]
         event = node.event
 
-        current_key = event.key
-
         event.magnitude = action.old_magnitude
         event.depth = action.old_depth
         event.x = action.old_x
@@ -1774,16 +1848,10 @@ class Scenario:
         event.attention_status = action.old_attention_status
 
         # priority y key son @property: al restaurar los valores, la clave
-        # vieja se recalcula sola.
-        new_key = event.key
-
-        if current_key != new_key:
-            balance = (self.mode == Mode.NORMAL)
-            self.avl_tree.delete(current_key, balance=balance)
-            self.bst_tree.delete(current_key)
-            new_node = self.avl_tree.insert(event, balance=balance)
-            self.bst_tree.insert(event)
-            self.event_index[event_id] = new_node
+        # vieja se recalcula sola. Los árboles vuelven a la forma exacta de
+        # antes de la corrección, con el nodo ORIGINAL del evento en su
+        # lugar (si la clave había cambiado, la corrección creó otro nodo).
+        self._restore_tree_checkpoint(action.tree_checkpoint, [event_id])
 
         for other_id, old_ref in action.old_references.items():
             self._assign_reference(self._find_any_event(other_id), old_ref)
@@ -1812,12 +1880,10 @@ class Scenario:
         propio evento).
         """
         event_id = action.event_id
-        node = self.event_index[event_id]
-        event = node.event
+        event = self.event_index[event_id].event
 
-        balance = (self.mode == Mode.NORMAL)
-        self.avl_tree.delete(event.key, balance=balance)
-        self.bst_tree.delete(event.key)
+        # Árboles a la forma exacta de antes de reinsertar el evento.
+        self._restore_tree_checkpoint(action.tree_checkpoint)
         del self.event_index[event_id]
 
         event.magnitude = action.old_magnitude
@@ -1850,10 +1916,9 @@ class Scenario:
 
         self.eliminated_IDs.discard(event_id)
 
-        balance = (self.mode == Mode.NORMAL)
-        node = self.avl_tree.insert(event, balance=balance)
-        self.bst_tree.insert(event)
-        self.event_index[event_id] = node
+        # Árboles a la forma exacta de antes de eliminar: el nodo ORIGINAL
+        # vuelve a su posición (no se reinserta como hoja).
+        self._restore_tree_checkpoint(action.tree_checkpoint, [event_id])
 
         for other_id, old_ref in action.old_references.items():
             self._assign_reference(self._find_any_event(other_id), old_ref)
@@ -1944,27 +2009,18 @@ class Scenario:
 
         Las asociaciones no se tocan: el archivo no las cambió.
         """
-        balance = (self.mode == Mode.NORMAL)
+        # Árboles a la forma exacta de antes del archivo (la rama vuelve a
+        # colgar de donde estaba y se deshacen las rotaciones del ascenso);
+        # también resta las rotaciones que sumó el archivo.
+        self._restore_tree_checkpoint(action.tree_checkpoint, action.event_ids)
 
-        self.avl_tree.attach_subtree(
-            action.archived_root,
-            action.former_parent,
-            action.was_left_child,
-            balance=balance,
-        )
-
-        for node in self.avl_tree.subtree_nodes(action.archived_root):
-            event_id = node.event.event_id
-            self.event_index[event_id] = node
-            self.bst_tree.insert(node.event)
+        for event_id in action.event_ids:
             if event_id in self.archived_history:
                 del self.archived_history[event_id]
 
-        self.avl_tree.revert_rotation_metrics(action.rotation_delta)
         self._revert_counters(action.counter_delta)
 
-        root_id = action.event_ids[0] if action.event_ids else None
-        return {"undone": "mass_archive", "root_id": root_id}
+        return {"undone": "mass_archive", "root_id": action.archived_root.event.event_id}
 
     def _undo_global_recovery(self, action: GlobalRecoveryAction) -> dict:
         """Deshace una recuperación global: restaura la topología del AVL
@@ -2419,9 +2475,7 @@ class Scenario:
     # - Memoria: O(1) por la foto (solo referencias), en vez de O(n).
     #
     # El reloj se guarda como VALOR (self.simulation_clock en ese instante)
-    # y se restaura con el setter, igual que ClockAdvanceAction. Guardar el
-    # ancla monotónica vieja haría que, al deshacer, el reloj "saltara" lo
-    # que duró el escenario cargado.
+    # y se restaura con el setter, igual que ClockAdvanceAction.
     #
     # La pila de deshacer NO es parte del estado: es la historia. La
     # LoadAction se apila encima de las acciones anteriores, y al deshacer
@@ -2463,7 +2517,7 @@ class Scenario:
         self.zones = state["zones"]
         self.stations = state["stations"]
         self.report_queue = state["report_queue"]
-        self.simulation_clock = state["simulation_clock"]  # setter: reinicia el ancla
+        self.simulation_clock = state["simulation_clock"]
         self.L = state["L"]
         self.W = state["W"]
         self.R = state["R"]
@@ -2593,7 +2647,7 @@ class Scenario:
         })
         return data
 
-    def load_scenario(self, data: dict) -> dict:
+    def load_scenario(self, data: dict, from_version: bool = False) -> dict:
         """Carga un escenario desde un archivo JSON (sección 12) como UNA
         acción que se puede deshacer (sección 13).
 
@@ -2671,7 +2725,7 @@ class Scenario:
         if load_mode == "insertions":
             new_state, warnings = self._build_state_from_insertions(data, general)
         else:
-            new_state, warnings = self._build_state_from_topology(data, general)
+            new_state, warnings = self._build_state_from_topology(data, general, from_version)
 
         # Todo validó: ahora sí se aplica.
         previous_state = self._snapshot_full_state()
@@ -2942,7 +2996,8 @@ class Scenario:
             )
         return temp._snapshot_full_state(), []
 
-    def _build_state_from_topology(self, data: dict, general: dict) -> tuple[dict, list]:
+    def _build_state_from_topology(self, data: dict, general: dict,
+                                   from_version: bool = False) -> tuple[dict, list]:
         """AUXILIAR: modo 2, carga por topología. Además de lo del modo 1,
         valida la consistencia de la topología. Corta en el primer error.
         Construye todo en objetos nuevos; self no se toca."""
@@ -3141,7 +3196,15 @@ class Scenario:
                 raise self._load_error("mode", f"debe ser 'Normal' o 'Stress' (llegó {data['mode']!r})") from None
         unbalanced = [node.event.event_id for node in tree.unbalanced_nodes()]
         if unbalanced:
-            if self.mode != Mode.STRESS:
+            # Una versión guardada en modo estrés trae su propio modo: al
+            # restaurarla se recupera tal cual (sección 13), aunque el
+            # escenario actual esté en Normal. Un archivo cualquiera sigue
+            # exigiendo el modo estrés activado (sección 12).
+            stress_allowed = (
+                self.mode == Mode.STRESS
+                or (from_version and file_mode == Mode.STRESS)
+            )
+            if not stress_allowed:
                 raise self._load_error(
                     "avl", f"la topología está ordenada pero desbalanceada (nodos {unbalanced}); "
                         f"solo se puede cargar con el modo estrés activado"
@@ -3251,7 +3314,7 @@ class Scenario:
         if name not in self.versions:
             raise KeyError(f"Version '{name}' was not found")
 
-        result = self.load_scenario(self.versions[name])
+        result = self.load_scenario(self.versions[name], from_version=True)
         result["restored_version"] = name
         return result
 
@@ -3261,6 +3324,23 @@ class Scenario:
         if name not in self.versions:
             raise KeyError(f"Version '{name}' was not found")
         del self.versions[name]
+
+    def version_summaries(self) -> list[dict]:
+        """Names of the saved versions with a few fields to tell them apart
+        in the selection list (section 13: "restore by selection").
+        Alphabetical order, same as list_versions."""
+        summaries = []
+        for name in self.list_versions():
+            data = self.versions[name]
+            summaries.append({
+                "name": name,
+                "simulation_clock": data.get("simulation_clock"),
+                "mode": data.get("mode"),
+                "active_events": len(data.get("avl", {}).get("nodes", [])),
+                "archived_events": len(data.get("archived", [])),
+                "queued_reports": len(data.get("report_queue", [])),
+            })
+        return summaries
 
     def export_versions(self) -> dict:
         """Shallow copy of all saved versions, for the router to write

@@ -22,27 +22,43 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 # encolado no se puede quitar individualmente, solo vaciar toda la cola.
 
 
-def _build_report(data: ReportCreate, scenario: Scenario) -> Report:
+def _build_report(
+    data: ReportCreate,
+    scenario: Scenario,
+    preceding_reports: list[Report] | None = None,
+) -> Report:
     """Turn the schema into the domain object.
 
-    The revision comes directly from the payload (it is what the emitting
-    station claims), so the backend does NOT recompute it. Recomputing it
-    with next_report_revision() would always produce "current + 1" and
-    force every report into the correction case, breaking the confirmation,
-    conflict, and old cases of the section 6 table.
+    If the payload brings `revision_num`, it is used as is (it is what the
+    emitting station claims). Always recomputing it with
+    next_report_revision() would produce "current + 1" and force every
+    report into the correction case, breaking the confirmation, conflict,
+    and old cases of the section 6 table.
+
+    If the payload does NOT bring it, next_report_revision() is used only
+    as a suggestion. `preceding_reports` are the reports of the same burst
+    that are not queued yet, so two reports of the same event in one burst
+    get consecutive suggestions.
 
     The station is looked up in the scenario because Report stores the
     Station object, not just its id. Raises KeyError if it does not exist.
     """
     return Report(
         event_id=data.event_id,
-        revision_num=data.revision_num,
+        revision_num=(
+            data.revision_num
+            if data.revision_num is not None
+            else scenario.next_report_revision(data.event_id, preceding_reports)
+        ),
         station=scenario.get_station(data.station_id),
         magnitude=data.magnitude,
         depth=data.depth,
         x=data.x,
         y=data.y,
-        occurred_at=data.occurred_at,
+        # No date in the payload -> the current simulation clock.
+        occurred_at=(
+            data.occurred_at if data.occurred_at is not None else scenario.simulation_clock
+        ),
     )
 
 def _to_response(report: Report, position: int) -> dict:
@@ -106,7 +122,9 @@ def enqueue_report_batch(
     """Prepara una ráfaga de reportes de N estaciones. Todo o nada: si uno
     falla, no se encola ninguno."""
     try:
-        reports = [_build_report(item, scenario) for item in data.reports]
+        reports = []
+        for item in data.reports:
+            reports.append(_build_report(item, scenario, reports))
         first_position = scenario.enqueue_reports(reports)
         return [
             _to_response(report, first_position + offset)

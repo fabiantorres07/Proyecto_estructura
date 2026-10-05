@@ -107,13 +107,18 @@ def create_event(
         station = scenario.get_station(data.station_id)
         report = Report(
             event_id=data.event_id,
-            revision_num=data.revision_num,
+            # Manual creation starts at revision 1 (section 6) unless the
+            # form sends a revision explicitly.
+            revision_num=data.revision_num if data.revision_num is not None else 1,
             station=station,
             magnitude=data.magnitude,
             depth=data.depth,
             x=data.x,
             y=data.y,
-            occurred_at=data.occurred_at,
+            # No date in the payload -> the current simulation clock.
+            occurred_at=(
+                data.occurred_at if data.occurred_at is not None else scenario.simulation_clock
+            ),
         )
         scenario._validate_report(report)
         event = scenario.create_event(
