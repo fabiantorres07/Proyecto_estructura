@@ -68,6 +68,7 @@ class Scenario:
 
     @staticmethod
     def _as_utc(value: datetime) -> datetime:
+        """Checks that the datetime contains a timezone. If not, raises an error. If it does, transforms it into UTC."""
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("Event and report timestamps must include a timezone")
         return value.astimezone(timezone.utc)
@@ -77,6 +78,8 @@ class Scenario:
     """==============================================="""
 
     def set_mode(self, mode):
+        """Sets the mode. If trying to change from stress to normal, it checks if the AVL tree is balanced before approving
+        the opperation."""
         if not isinstance(mode, Mode):
             raise ValueError("Mode must either be Stress or Normal")
 
@@ -89,6 +92,7 @@ class Scenario:
         return self.mode
     
     def get_mode(self):
+        """Returns the current mode"""
         return self.mode
 
 
@@ -97,11 +101,15 @@ class Scenario:
     """==============================================="""
     @property
     def simulation_clock(self) -> datetime:
+        """A monotonic works like a cronometer, to check the elapsed seconds it substracts the initial cronometer value with 
+        the current time. this delta is then returned."""
         elapsed_seconds = monotonic() - self._clock_anchor_monotonic
         return self._simulation_clock + timedelta(seconds=elapsed_seconds)
 
     @simulation_clock.setter
     def simulation_clock(self, value: datetime) -> None:
+        """Sets the initial time as the setted time. Creates a monotonic that'll check how much time passes since the clock
+        has been set"""
         self._simulation_clock = value
         self._clock_anchor_monotonic = monotonic()
 
@@ -1632,12 +1640,11 @@ class Scenario:
 
 
     def _undo_creation(self, action: CreationAction) -> dict:
-        """Deshace una creación: saca el evento de las estructuras activas
-        y restaura las referencias que la creación había cambiado.
+        """Undoes an event creation: it takes the event out of the active structures
+        and reinstates the reference that the creation had changed.
 
-        En old_references puede venir una entrada para el propio evento
-        creado (con None). Se ignora, porque el evento ya no existe y
-        _find_any_event fallaría. Solo se restauran los OTROS.
+        old_references can come with an input for the proper event created with None, it gets 
+        ignored, because the event no longer exists and _find_any_event would fail. The others get reinstated.
         """
         event_id = action.event_id
         node = self.event_index[event_id]
@@ -1656,11 +1663,11 @@ class Scenario:
         return {"undone": "creation", "event_id": event_id}
 
     def _undo_correction(self, action: CorrectionAction) -> dict:
-        """Deshace una corrección:
-        1. Guarda la clave ACTUAL del evento (con los datos corregidos).
-        2. Restaura los valores viejos uno por uno.
-        3. Si la clave cambió, reubica el nodo en AVL/BST.
-        4. Restaura las referencias de todos los afectados.
+        """Undoes a correction:
+        1. Saves the current event key with the corrected data
+        2. Reinstates the old values one by one
+        3. If the key changed, relocates the node in AVL/BST
+        4. Reinstates the references of every event that was affected.
         """
         event_id = action.event_id
         node = self.event_index[event_id]
@@ -2455,70 +2462,69 @@ class Scenario:
         return data
 
     def load_scenario(self, data: dict) -> dict:
-        """Carga un escenario desde un archivo JSON (sección 12) como UNA
-        acción que se puede deshacer (sección 13).
+        """Loads a scenario from a JSON file. This action can be undone.
 
-        Recibe el JSON YA PARSEADO (dict). Leer el archivo que el usuario
-        elige en el explorador y hacer json.loads le toca al router/front.
+        It receives the JSON in a dictionary format, reads the archive that the user chooses.
 
-        Regla general: validar TODO primero y aplicar después. El estado
-        nuevo se construye en objetos nuevos; self no se toca hasta que
-        todo valida. Si algo falla se lanza ValueError con el primer error
-        (dónde está y por qué) y el escenario actual queda igual.
+        It validates that everything is right, and then it loads. The new state builds new
+        objects. The scenario desn't modify itself unless everything has been validated.
+        
+        If something fails, a ValueError gets thrown, showing exactly what caused the error and stops loading
+        inmediatly
 
-        Si todo valida:
+        if everything gets validated:
+        
         1. previous_state = self._snapshot_full_state()
-        2. self._restore_full_state(estado_nuevo)
+        2. self._restore_full_state(new_state)
         3. self.undo_stack.push(LoadAction(previous_state))
 
-        ESQUEMA DEL ARCHIVO (decisión del equipo, sección 12):
-        {
-          "load_mode": "insertions" | "topology",        (obligatorio)
-          "simulation_clock": "2026-09-07T12:00:00Z",    (opcional)
-          "parameters": {"L": 3, "W": 48, "R": 40, "T": 72},  (opcional)
-          "zones": [{"name", "x_min", "x_max", "y_min", "y_max",
-                     "is_populated"}],                   (opcional)
-          "stations": [{"station_id", "x", "y"}],        (opcional)
-          ... y lo propio de cada modo (ver abajo).
-        }
-        Lo opcional que no venga se HEREDA del escenario actual (la sección
-        9 permite configurar L "antes de cargar los datos"). Lo heredado se
-        informa en "inherited".
+        SCHEMA OF THE ARCHIVE
 
-        Modo "insertions":
+        {
+          "load_mode": "insertions" | "topology",        (mandatory)
+          "simulation_clock": "2026-09-07T12:00:00Z",    (optional)
+          "parameters": {"L": 3, "W": 48, "R": 40, "T": 72},  (optional)
+          "zones": [{"name", "x_min", "x_max", "y_min", "y_max",
+                     "is_populated"}],                   (optional)
+          "stations": [{"station_id", "x", "y"}],        (optional)
+          ... And the required for each mode
+        }
+
+        The optional features that aren't included will take the current scenario values.
+        This values will be informed as "inherited"
+
+        Mode "insertions":
           "events": [{"event_id", "magnitude", "depth", "x", "y",
                       "occurred_at", "station_id"}, ...]
-          Se insertan en ese orden, con balanceo activo, en un AVL y un BST
-          (create_event: revisión 1, pendiente, asociaciones). Queda en modo
-          NORMAL. Sin histórico, eliminados ni cola. Las métricas empiezan
-          en cero más las rotaciones de la propia carga.
+          They get inserted in that order, with active balancing in an AVL and BST
+          (create_event: revision 1, pending, asotiations). remains in normal mode
+          without history, deleted or queue. The metrcis begin in zero plus the rotations 
+          made during the load of the file.
 
-        Modo "topology" (el guardado estructural completo):
+        Mode "topology" (the full structural load):
           "avl": {"root_id": int | null,
                   "nodes": [{"event_id", "magnitude", "depth", "x", "y",
                              "occurred_at", "revision", "stations": [ids],
                              "attention_status": "pending" | "reviewed",
                              "priority", "height", "balance_factor",
                              "left_id": int | null, "right_id": int | null,
-                             "reference_id" (opcional, se verifica)}]},
-          "archived": [{mismos datos del evento, sin enlaces}],  (opcional)
-          "eliminated_ids": [int],                                (opcional)
+                             "reference_id" (optional, gets verified)}]},
+          "archived": [{Same data as the real event, but without associations}],  (optional)
+          "eliminated_ids": [int],                                (optional)
           "report_queue": [{"event_id", "revision_num", "station_id",
                             "magnitude", "depth", "x", "y",
-                            "occurred_at"}],                      (opcional)
-          "mode": "Normal" | "Stress",                            (opcional)
-          "metrics": {"LL": 0, ...}                               (opcional)
-          La topología se recupera TAL CUAL (sin reinsertar). Las
-          asociaciones se reconstruyen con la misma política determinista
-          (si el archivo trae reference_id, debe coincidir). El BST se
-          reconstruye insertando en preorden del AVL, así queda con la
-          misma forma que el AVL cargado.
+                            "occurred_at"}],                      (optional)
+          "mode": "Normal" | "Stress",                            (optional)
+          "metrics": {"LL": 0, ...}                               (optional)
 
-        Fechas: texto ISO 8601 con zona horaria ("...Z") o datetime.
+          The topology loads without reinsertions, the associations get rebuilt with the same
+          deterministic policy (if the file contains reference_id, it must match). The BST
+          rebuilds itself inserting in preorder in the AVL, so it has the same shape as the loaded AVL.
 
-        Devuelve un resumen: load_mode, mode, cantidades, warnings,
-        inherited, y raíz/altura/profundidad máxima/hojas de ambos árboles
-        (lo que la sección 12 pide mostrar al terminar la carga)."""
+        Dates: text with the ISO 8601  format with timezone ("...Z") or datetime.
+
+        Returns a resume: load_mode, mode, cantidades, warnings,
+        inherited, and root/height/maximum depth/leafs from both trees"""
         if not isinstance(data, dict):
             raise self._load_error("archivo", "el contenido debe ser un objeto JSON")
 
