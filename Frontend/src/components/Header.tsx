@@ -85,23 +85,6 @@ const Header = (props: {
     void loadMode();
   }, []);
 
-  useEffect(() => {
-    if (isClockLoading || isClockUpdating) {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      setDateTime((currentDateTime) => {
-        const currentTimestamp = Date.parse(currentDateTime);
-        return Number.isNaN(currentTimestamp)
-          ? currentDateTime
-          : toLocalDateTime(new Date(currentTimestamp + 1000));
-      });
-    }, 1000);
-
-    return () => window.clearInterval(interval);
-  }, [isClockLoading, isClockUpdating]);
-
   const handleDateTimeChange = async (value: string) => {
     setDateTime(value);
     const updatedClock = new Date(value);
