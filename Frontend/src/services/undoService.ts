@@ -3,13 +3,14 @@ import { UndoResponse } from "../models/Undo/UndoResponse";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/undo`;
 
-export const SCENARIO_UNDONE_EVENT = "sismolab:scenario-undone";
+export const SCENARIO_STATE_CHANGED_EVENT = "sismolab:scenario-state-changed";
+export const SCENARIO_UNDONE_EVENT = SCENARIO_STATE_CHANGED_EVENT;
 
 class UndoService {
     async undo(): Promise<UndoResponse> {
         const response = await axios.post<UndoResponse>(API_URL);
         if (typeof window !== "undefined") {
-            window.dispatchEvent(new Event(SCENARIO_UNDONE_EVENT));
+            window.dispatchEvent(new Event(SCENARIO_STATE_CHANGED_EVENT));
         }
         return response.data;
     }

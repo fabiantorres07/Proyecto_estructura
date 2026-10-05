@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { ChangeEvent, useEffect, useRef, useState } from 'react';
 import { Download, Upload, Undo2 } from 'lucide-react';
 import Swal from 'sweetalert2';
 import { clockService } from '../services/clockService';
@@ -9,6 +9,7 @@ import {
   modeService,
 } from '../services/modeService';
 import { undoService } from '../services/undoService';
+import { scenarioService } from '../services/scenarioService';
 
 const toLocalDateTime = (date: Date) =>
   new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
@@ -27,6 +28,8 @@ const Header = (props: {
   const [isModeUpdating, setIsModeUpdating] = useState(false);
   const [isAvlBalanced, setIsAvlBalanced] = useState(true);
   const [isUndoing, setIsUndoing] = useState(false);
+  const [isScenarioBusy, setIsScenarioBusy] = useState(false);
+  const scenarioFileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const loadClock = async () => {
@@ -199,6 +202,105 @@ const Header = (props: {
     }
   };
 
+  const handleExportScenario = async () => {
+    const selection = await Swal.fire({
+      title: 'Formato de exportación',
+      text: 'Topología conserva la estructura completa. Inserciones exporta solo eventos activos y reconstruye los árboles al cargarlos.',
+      input: 'select',
+      inputOptions: {
+        topology: 'Topología completa',
+        insertions: 'Por inserciones',
+      },
+      inputValue: 'topology',
+      showCancelButton: true,
+      confirmButtonText: 'Descargar',
+      cancelButtonText: 'Cancelar',
+    });
+    if (!selection.isConfirmed || (selection.value !== 'insertions' && selection.value !== 'topology')) return;
+
+    setIsScenarioBusy(true);
+    try {
+      const scenario = await scenarioService.exportScenario(selection.value);
+      const file = new Blob([JSON.stringify(scenario, null, 2)], { type: 'application/json' });
+      const downloadUrl = URL.createObjectURL(file);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `sismolab-${selection.value}-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      link.click();
+      URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+      await Swal.fire({
+        title: 'Error al exportar',
+        text: getApiErrorMessage(error, 'No se pudo descargar la simulación'),
+        icon: 'error',
+      });
+    } finally {
+      setIsScenarioBusy(false);
+    }
+  };
+
+  const handleImportScenario = async (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    setIsScenarioBusy(true);
+    try {
+      const parsed: unknown = JSON.parse(await file.text());
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error('El archivo debe contener un objeto JSON de simulación.');
+      }
+
+      const detectedMode = (parsed as Record<string, unknown>).load_mode;
+      const defaultMode = detectedMode === 'insertions' ? 'insertions' : 'topology';
+      const confirmation = await Swal.fire({
+        title: 'Formato de carga',
+        text: 'La simulación actual será reemplazada. Inserciones reconstruye los árboles desde la lista de eventos; topología restaura el árbol guardado.',
+        input: 'select',
+        inputOptions: {
+          insertions: 'Por inserciones',
+          topology: 'Topología completa',
+        },
+        inputValue: defaultMode,
+        showCancelButton: true,
+        confirmButtonText: 'Cargar versión',
+        cancelButtonText: 'Cancelar',
+      });
+      if (!confirmation.isConfirmed || (confirmation.value !== 'insertions' && confirmation.value !== 'topology')) return;
+
+      const selectedMode = confirmation.value;
+      const result = await scenarioService.loadScenario({
+        ...(parsed as Record<string, unknown>),
+        load_mode: selectedMode,
+      });
+      const [clock, stress, audit] = await Promise.all([
+        clockService.getClock(),
+        modeService.getMode(),
+        modeService.getStructureAudit(),
+      ]);
+      setDateTime(toLocalDateTime(clock));
+      setStressMode(stress);
+      setIsAvlBalanced(audit.is_valid && audit.is_avl);
+
+      const warnings = result.warnings.length ? ` Avisos: ${result.warnings.join('; ')}.` : '';
+      await Swal.fire({
+        title: 'Versión cargada',
+        text: `${selectedMode === 'insertions' ? 'Por inserciones. ' : 'Por topología. '}${result.active_events} eventos activos, ${result.archived_events} archivados y ${result.queued_reports} reportes en cola.${warnings}`,
+        icon: 'success',
+      });
+      window.location.reload();
+    } catch (error) {
+      await Swal.fire({
+        title: 'No se pudo cargar la versión',
+        text: getApiErrorMessage(error, 'El archivo no es válido o el backend no está disponible.'),
+        icon: 'error',
+      });
+    } finally {
+      input.value = '';
+      setIsScenarioBusy(false);
+    }
+  };
+
   return (
     <header className="sticky top-0 z-999 flex w-full bg-white drop-shadow-1 dark:bg-boxdark dark:drop-shadow-none">
       <div className="flex w-full flex-wrap items-center gap-4 px-4 py-3 shadow-2 md:px-6 2xl:px-11">
@@ -261,15 +363,27 @@ const Header = (props: {
           </label>
 
           <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={scenarioFileInput}
+              type="file"
+              accept="application/json,.json"
+              className="sr-only"
+              aria-label="Seleccionar archivo JSON de simulación"
+              onChange={(event) => void handleImportScenario(event)}
+            />
             <button
               type="button"
+              disabled={isScenarioBusy}
+              onClick={() => scenarioFileInput.current?.click()}
               className="inline-flex items-center gap-2 rounded border border-stroke px-3 py-2 text-sm font-medium text-body hover:bg-gray dark:border-strokedark dark:text-bodydark dark:hover:bg-meta-4"
             >
               <Upload size={16} aria-hidden="true" />
-              <span>Cargar versión</span>
+              <span>{isScenarioBusy ? 'Procesando...' : 'Cargar versión'}</span>
             </button>
             <button
               type="button"
+              disabled={isScenarioBusy}
+              onClick={() => void handleExportScenario()}
               className="inline-flex items-center gap-2 rounded border border-stroke px-3 py-2 text-sm font-medium text-body hover:bg-gray dark:border-strokedark dark:text-bodydark dark:hover:bg-meta-4"
             >
               <Download size={16} aria-hidden="true" />

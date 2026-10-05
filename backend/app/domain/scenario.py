@@ -2333,6 +2333,127 @@ class Scenario:
         self.metrics = state["metrics"]
         self.avl_tree.metrics = self.metrics
 
+    @staticmethod
+    def _export_datetime(value: datetime) -> str:
+        return Scenario._as_utc(value).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _export_stored_event(event: Event) -> dict:
+        return {
+            "event_id": event.event_id,
+            "magnitude": event.magnitude,
+            "depth": event.depth,
+            "x": event.x,
+            "y": event.y,
+            "occurred_at": Scenario._export_datetime(event.occurred_at),
+            "revision": event.revision,
+            "stations": sorted(station.station_id for station in event.stations),
+            "attention_status": event.attention_status.value,
+            "reference_id": event.reference_id,
+        }
+
+    def _export_avl_nodes(self, node: Optional[AVLNode], nodes: list[dict]) -> None:
+        if node is None:
+            return
+
+        item = self._export_stored_event(node.event)
+
+        #As the event lacks some properties that are needed for the load by insertions,
+        #we add the missing properties with item.update()
+
+        item.update({
+            "priority": node.event.priority,
+            "height": node.height,
+            "balance_factor": node.balance_factor,
+            "left_id": node.left_son.event.event_id if node.left_son else None,
+            "right_id": node.right_son.event.event_id if node.right_son else None,
+        })
+        nodes.append(item)
+        self._export_avl_nodes(node.left_son, nodes)
+        self._export_avl_nodes(node.right_son, nodes)
+
+    def _export_insertion_events(self, node: Optional[AVLNode], events: list[dict]) -> None:
+        if node is None:
+            return
+
+        event = node.event
+        station_ids = sorted(station.station_id for station in event.stations)
+        if not station_ids:
+            raise ValueError(f"Event {event.event_id} has no station and cannot be exported as insertions")
+        events.append({
+            "event_id": event.event_id,
+            "magnitude": event.magnitude,
+            "depth": event.depth,
+            "x": event.x,
+            "y": event.y,
+            "occurred_at": self._export_datetime(event.occurred_at),
+            "station_id": station_ids[0],
+        })
+        self._export_insertion_events(node.left_son, events)
+        self._export_insertion_events(node.right_son, events)
+
+    def export_scenario(self, load_mode: str = "topology") -> dict:
+        """Return the scenario in either insertion or exact-topology load format."""
+        if load_mode not in ("insertions", "topology"):
+            raise ValueError("load_mode must be 'insertions' or 'topology'")
+
+        data = {
+            "load_mode": load_mode,
+            "simulation_clock": self._export_datetime(self.simulation_clock),
+            "parameters": {name: getattr(self, name) for name in ("L", "W", "R", "T")},
+            "zones": [
+                {
+                    "name": zone.name,
+                    "x_min": zone.x_min,
+                    "x_max": zone.x_max,
+                    "y_min": zone.y_min,
+                    "y_max": zone.y_max,
+                    "is_populated": zone.is_populated,
+                }
+                for zone in self.zones
+            ],
+            "stations": [
+                {"station_id": station.station_id, "x": station.x, "y": station.y}
+                for station in sorted(self.stations.values(), key=lambda item: item.station_id)
+            ],
+        }
+
+        if load_mode == "insertions":
+            events: list[dict] = []
+            self._export_insertion_events(self.avl_tree.root, events)
+            data["events"] = events
+            return data
+
+        avl_nodes: list[dict] = []
+        self._export_avl_nodes(self.avl_tree.root, avl_nodes)
+        data.update({
+            "avl": {
+                "root_id": self.avl_tree.root.event.event_id if self.avl_tree.root else None,
+                "nodes": avl_nodes,
+            },
+            "archived": [
+                self._export_stored_event(event)
+                for event in sorted(self.archived_history.values(), key=lambda item: item.event_id)
+            ],
+            "eliminated_ids": sorted(self.eliminated_IDs),
+            "report_queue": [
+                {
+                    "event_id": report.event_id,
+                    "revision_num": report.revision_num,
+                    "station_id": report.station.station_id,
+                    "magnitude": report.magnitude,
+                    "depth": report.depth,
+                    "x": report.x,
+                    "y": report.y,
+                    "occurred_at": self._export_datetime(report.occurred_at),
+                }
+                for report in self.report_queue.items()
+            ],
+            "mode": self.mode.value,
+            "metrics": dict(self.metrics),
+        })
+        return data
+
     def load_scenario(self, data: dict) -> dict:
         """Carga un escenario desde un archivo JSON (sección 12) como UNA
         acción que se puede deshacer (sección 13).

@@ -7,6 +7,7 @@ import { EventMapPoint } from "../../models/Event/EventMapPoint";
 import { stationService } from "../../services/stationService";
 import { zoneService } from "../../services/zoneService";
 import { eventService } from "../../services/eventService";
+import { SCENARIO_STATE_CHANGED_EVENT } from "../../services/undoService";
 
 const AppMap = () => {
   const [stations, setStations] = useState<Station[]>([]);
@@ -14,6 +15,7 @@ const AppMap = () => {
   const [events, setEvents] = useState<EventMapPoint[]>([]);
 
   useEffect(() => {
+    let active = true;
     const fetchMapData = async () => {
       try {
         const [loadedStations, loadedZones, loadedEvents] = await Promise.all([
@@ -21,10 +23,12 @@ const AppMap = () => {
           zoneService.getZones(),
           eventService.getActiveEvents(),
         ]);
+        if (!active) return;
         setStations(loadedStations);
         setZones(loadedZones);
         setEvents(loadedEvents.map(({ event_id, x, y }) => ({ event_id, x, y })));
       } catch (error) {
+        if (!active) return;
         Swal.fire({
           title: "Error",
           text: error instanceof Error ? error.message : "No se pudieron cargar los datos del mapa",
@@ -33,7 +37,13 @@ const AppMap = () => {
       }
     };
 
+    const refreshMapData = () => void fetchMapData();
     void fetchMapData();
+    window.addEventListener(SCENARIO_STATE_CHANGED_EVENT, refreshMapData);
+    return () => {
+      active = false;
+      window.removeEventListener(SCENARIO_STATE_CHANGED_EVENT, refreshMapData);
+    };
   }, []);
 
   return (
