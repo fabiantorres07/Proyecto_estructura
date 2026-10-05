@@ -15,7 +15,7 @@ from app.structures.queue import Queue
 from app.domain.action import (
     CreationAction, CorrectionAction, AttentionChangeAction, DeletionAction,
     ParameterChangeAction, ClockAdvanceAction, QueueStepAction, MassArchiveAction,
-    GlobalRecoveryAction, LoadAction, ReactivationAction,
+    GlobalRecoveryAction, LoadAction, ReactivationAction
 )
 from app.structures.avl_tree import AVLTree, ROTATION_METRIC_KEYS, AVLTopologySnapshot
 from app.structures.avl_node import AVLNode
@@ -148,23 +148,129 @@ class Scenario:
 
         return self.simulation_clock
 
+    """==============================================="""
+    """================GLOBAL PARAMETERS==================="""
+    """==============================================="""
 
-    
+    def change_parameters(self, changes: dict) -> dict:
+        """Change one or several global parameters (L, W, R, T).
+
+        Receives a dict {name: new_value}. Validates ALL names and values
+        before applying anything (atomic: if one fails, none is changed).
+        Ignores parameters whose value does not actually change.
+
+        Returns a dict with only the parameters that did change.
+
+        If W or R changes, the definition of "candidate" between events
+        changes, so it recalculates the reference of every active and
+        archived event. In that case, the action saves old_references so it
+        can be undone. For L and T there is no recalculation and no
+        old_references.
+
+        W and R together. If changes = {"W": 24, "R": 50} and both change:
+        W is applied first, references are recalculated, action is pushed
+        with old_refs (before W). Then R, references are recalculated again,
+        action is pushed with old_refs (which already reflects the W change).
+        When undoing, R is reverted first (going back to old R and restoring
+        the references from after W), then W.
+        It works, even though it recalculates twice.
+        """
+        valid_names = {"L", "W", "R", "T"}
+
+        # 1. Validate names.
+        for name in changes:
+            if name not in valid_names:
+                raise ValueError(f"Unknown parameter: {name}")
+
+        # 2. Validate values (in case someone calls Scenario directly).
+        if "L" in changes:
+            new_L = changes["L"]
+            if not isinstance(new_L, int) or isinstance(new_L, bool) or new_L < 0:
+                raise ValueError("L must be a non-negative integer")
+
+        for name in ("W", "R", "T"):
+            if name in changes and changes[name] <= 0:
+                raise ValueError(f"{name} must be a positive number")
+
+        # 3. Apply only those that truly change.
+        changed = {}
+
+        for name, new_value in changes.items():
+            old_value = getattr(self, name)
+            if old_value == new_value:
+                continue
+
+            # Snapshot of references before touching the parameter, only if
+            # applicable.
+            old_refs = None
+            if name in ("W", "R"):
+                old_refs = {
+                    event.event_id: event.reference_id
+                    for event in self._all_active_and_archived_events()
+                }
+
+            # Apply the change.
+            setattr(self, name, new_value)
+
+            # Recalculate all references if W or R changed.
+            if name in ("W", "R"):
+                for event in self._all_active_and_archived_events():
+                    self._recalculate_reference(event)
+
+            # Push the action with the old value and (if applicable) the
+            # previous snapshot.
+            self.undo_stack.push(
+                ParameterChangeAction(name, old_value, old_refs)
+            )
+            changed[name] = new_value
+
+        return changed
     """==============================================="""
     """================ZONE METHODS==================="""
     """==============================================="""
 
+    def _check_zones_and_stations_are_fixed(self) -> None:
+        """AUXILIAR: zones and stations are FIXED once the scenario has
+        events (sections 1 and 3: "the geometry remains fixed during the
+        scenario" and "stations... are immutable during the execution of
+        the system").
+
+        The CRUD is only free while there are NO events at all (neither
+        active nor archived). As soon as there is at least one event, the
+        three zone methods and the three station methods refuse to run.
+
+        Why ValueError: the operation is valid in the abstract, it is
+        just forbidden by the current state of the scenario. The router
+        translates ValueError -> 409 (conflict).
+
+        Why archived_history also counts: archived events keep their
+        identity and their associations (section 7), and their
+        `event.stations` still reference real stations. Blocking only on
+        event_index would let us delete a station that is still being
+        referenced by an archived event.
+        """
+        if self.event_index or self.archived_history:
+            raise ValueError(
+                "Zones and stations are fixed once the scenario has events"
+            )
+
     def add_zone(self, zone: Zone):
-        """This method is called to add a zone to the scenario. It checks if there is another existing zone with the same name, and if there isn't, then the new zone is added"""
+        """Add a zone. Only allowed while the scenario has no events
+        (see _check_zones_and_stations_are_fixed).
+
+        Checks that no other existing zone has the same name, and if not,
+        appends the new zone."""
+        self._check_zones_and_stations_are_fixed()
 
         if any(existing.name == zone.name for existing in self.zones):
-            raise ValueError("A zone with this name already exist")
-        
+            raise ValueError("A zone with this name already exists")
+
         self.zones.append(zone)
         return zone
 
     def get_zone(self, zone_name: str) -> Zone:
-        """This method returns the zone with the name that is being searched"""
+        """Return the zone with the requested name. Reads are always
+        allowed: the restriction is only on add/update/delete."""
         for zone in self.zones:
             if zone.name == zone_name:
                 return zone
@@ -172,13 +278,22 @@ class Scenario:
         raise KeyError(f"Zone '{zone_name}' was not found")
 
     def list_zones(self) -> list[Zone]:
-        """This method returns the list of zones of the scenario"""
-        return self.zones
+        """Return a COPY of the zones list. Same pattern as
+        list_stations: callers cannot modify the scenario's internal
+        list by accident."""
+        return list(self.zones)
 
     def update_zone(self, zone_name: str, changes: dict) -> Zone:
-        """This method is called to update the data of a zone that already exists"""
+        """Update an existing zone. Only allowed while the scenario has
+        no events (see _check_zones_and_stations_are_fixed).
+
+        Fields not present in `changes` keep their old value. Replaces
+        the old Zone instance with a new one (so __init__ revalidates),
+        in the same position in the list."""
+        self._check_zones_and_stations_are_fixed()
+
         current_zone = self.get_zone(zone_name)
-        #Either we put the new values, or if there isn't a new value, the old one remains
+
         updated_values = {
             "name": changes.get("name", current_zone.name),
             "x_min": changes.get("x_min", current_zone.x_min),
@@ -193,18 +308,18 @@ class Scenario:
         ):
             raise ValueError("A zone with this name already exists")
 
-        #The old instance gets replaced with the new one in the same index that the old one used to be
-
         updated_zone = Zone(**updated_values)
         zone_index = self.zones.index(current_zone)
         self.zones[zone_index] = updated_zone
         return updated_zone
 
     def delete_zone(self, zone_name: str) -> None:
-        """This method deletes a zone"""
+        """Delete a zone. Only allowed while the scenario has no events
+        (see _check_zones_and_stations_are_fixed)."""
+        self._check_zones_and_stations_are_fixed()
+
         zone = self.get_zone(zone_name)
         self.zones.remove(zone)
-
 
 
     """==============================================="""
@@ -212,7 +327,11 @@ class Scenario:
     """==============================================="""
 
     def add_station(self, station: Station) -> Station:
-        """Add a station, using its ID as the dictionary key."""
+        """Add a station, using its ID as the dictionary key. Only
+        allowed while the scenario has no events (see
+        _check_zones_and_stations_are_fixed)."""
+        self._check_zones_and_stations_are_fixed()
+
         if station.station_id in self.stations:
             raise ValueError("A station with this ID already exists")
 
@@ -220,112 +339,362 @@ class Scenario:
         return station
 
     def get_station(self, station_id: str) -> Station:
-        """This method returns the station with the id that is being searched"""
+        """Return the station with the requested id. Reads are always
+        allowed: the restriction is only on add/update/delete."""
         try:
             return self.stations[station_id]
         except KeyError:
             raise KeyError(f"Station '{station_id}' was not found") from None
 
     def list_stations(self) -> list[Station]:
-        """This method returns the list of stations of the scenario"""
+        """Return a COPY of the stations as a list. Same pattern as
+        list_zones: callers cannot modify the scenario's internal dict."""
         return list(self.stations.values())
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    def update_station(self, station_id: str, changes: dict) -> Station:
+        """Update an existing station. Only allowed while the scenario
+        has no events (see _check_zones_and_stations_are_fixed).
+
+        Fields not present in `changes` keep their old value. If the
+        station_id itself changes, the old key is removed and the new
+        key is added (the identity of the station is its id)."""
+        self._check_zones_and_stations_are_fixed()
+
+        current_station = self.get_station(station_id)
+
+        updated_values = {
+            "station_id": changes.get("station_id", current_station.station_id),
+            "x": changes.get("x", current_station.x),
+            "y": changes.get("y", current_station.y),
+        }
+
+        if updated_values["station_id"] != station_id and any(
+            existing_id == updated_values["station_id"] for existing_id in self.stations
+        ):
+            raise ValueError("A station with this id already exists")
+
+        updated_station = Station(**updated_values)
+        if updated_station.station_id != station_id:
+            del self.stations[station_id]
+        self.stations[updated_station.station_id] = updated_station
+        return updated_station
+
+    def delete_station(self, station_id: str) -> None:
+        """Delete a station. Only allowed while the scenario has no
+        events (see _check_zones_and_stations_are_fixed)."""
+        self._check_zones_and_stations_are_fixed()
+
+        self.get_station(station_id)
+        del self.stations[station_id]
+
+
+    """==============================================="""
+    """================REPORT METHODS================="""
+    """==============================================="""
+
+    # The queue only stores PREPARED reports: enqueueing does not touch
+    # events or trees. The decision for each report (section 6 table) is
+    # made when processing it, in process_next_report().
+    #
+    # Team decisions (Sep-29):
+    # - Reports with a timestamp later than the clock are rejected at
+    #   ENQUEUE time.
+    # - A queued report cannot be removed individually; only the whole
+    #   queue can be cleared.
+
+    def _validate_report(self, report: Report) -> None:
+        """Validations for a report that depend on the scenario state.
+        Ranges and formats were already validated by the schema
+        (ReportCreate).
+
+        Raises KeyError if the station is not registered, and ValueError
+        if the occurrence time is later than the simulation clock.
+
+        Why we check the id and not the Station object:
+        the schema reconstructs the Station from the payload, so it is
+        never the same instance as the one stored in self.stations. What
+        we really care about is "does this station id exist in the
+        scenario", not "is this the exact object we registered". Checking
+        the id is both simpler and less fragile.
+        """
+        station_id = report.station.station_id
+        if station_id not in self.stations:
+            raise KeyError(f"Station '{station_id}' was not found")
+
+        if self._as_utc(report.occurred_at) > self.simulation_clock:
+            raise ValueError(
+                f"Report for event {report.event_id} occurred after the "
+                f"simulation clock ({self.simulation_clock.replace(microsecond=0).isoformat()})"
+            )
+
+    def next_report_revision(self, event_id: int, preceding_reports: Optional[list[Report]] = None,) -> int:
+        """Return the next revision after the latest queued or staged report.
+
+        If this event has no pending report, continue from its current active
+        or archived revision. A new event starts at revision 1.
+        """
+        queued_and_staged = self.report_queue.items() + (preceding_reports or [])
+        for report in reversed(queued_and_staged):
+            if report.event_id == event_id:
+                return report.revision_num + 1
+
+        node = self.event_index.get(event_id)
+        if node is not None:
+            return node.event.revision + 1
+
+        archived_event = self.archived_history.get(event_id)
+        if archived_event is not None:
+            return archived_event.revision + 1
+
+        return 1
+
+    def enqueue_report(self, report: Report) -> int:
+        """Append a report to the end of the FIFO queue and return its
+        position (1 = the next one to be processed). If the report is not
+        valid, raises the exception from _validate_report and the queue
+        stays unchanged. O(1)."""
+        self._validate_report(report)
+        self.report_queue.enqueue(report)
+        return len(self.report_queue)
+
+    def enqueue_reports(self, reports: list[Report]) -> int:
+        """Enqueue a burst of reports in the order received, atomically:
+        first validate ALL of them, and only if every one is valid, enqueue
+        them. So an error on report 5 does not leave the first 4 enqueued.
+        Returns the position of the first report of the burst. O(N)."""
+        for report in reports:
+            self._validate_report(report)
+
+        first_position = len(self.report_queue) + 1
+        for report in reports:
+            self.report_queue.enqueue(report)
+        return first_position
+
+    def list_reports(self) -> list[Report]:
+        """Copy of the queue in reception order (the first one is the next
+        to be processed). It is a copy: modifying the list does not alter
+        the queue. O(n)."""
+        return self.report_queue.items()
+
+    def clear_report_queue(self) -> int:
+        """Discard all pending reports and return how many there were.
+        Does not touch events, trees, or the clock.
+
+        Team decision (documented): this operation is NOT recorded on the
+        undo stack.
+
+        Why: section 13 lists the actions that must be undoable (create,
+        correct, delete, mass archive, parameter change, clock advance,
+        attention change, load, global recovery and each queue step).
+        "Clear the queue" is NOT in that list. The statement also says
+        the queue is part of the recoverable state, but only in the
+        context of saving/restoring versions, not as a standalone
+        undoable action.
+
+        So we follow the explicit list in section 13. The state changes
+        (the queue is emptied), but there is no way back via undo(); the
+        user would have to use a saved version if they want the reports
+        back.
+
+        If the queue is already empty, nothing happens (returns 0)."""
+        return self.report_queue.clear()
+
+
+    def process_next_report(self) -> dict:
+        """Process ONE report from the queue (section 8: "one report per step").
+
+        Takes the first one from the queue and decides which case it is. The
+        possible cases are in the section 6 table: unknown id (create),
+        greater revision (correct), same revision and same data (confirm),
+        same revision and different data (conflict), lower revision (old),
+        and eliminated id (reject).
+
+        Data equality refers to magnitude, depth, epicenter (x, y), and
+        occurrence time. It does NOT count the sending station.
+
+        Even if the report is rejected/old/conflict, a QueueStepAction is
+        pushed so the report can be put back in its queue position on undo.
+
+        ──────────────────────────────────────────────────────────────
+        The problem of TWO actions for a single step
+        ──────────────────────────────────────────────────────────────
+
+        A queue step is ONE action for the user, but internally it may
+        trigger another operation (create, correct, or reactivate an event).
+        create_event, correct_event, and archived_reactivation push their own
+        action at the end. If process_next_report also pushed a
+        QueueStepAction, there would be TWO actions on the stack per single
+        step, and the user would have to press "undo" twice.
+
+        The solution is to pop the inner action they just pushed and put it
+        INSIDE the QueueStepAction. So the stack only sees one action per
+        step, but that action carries inside everything needed to revert the
+        inner operation.
+        """
+
+        # 1. Empty queue → nothing to process.
+        if self.report_queue.is_empty():
+            raise ValueError("No hay reportes pendientes en la cola")
+
+        # 2. Peek: look at the first one without removing it.
+        report = self.report_queue.peek()
+        queue_position = 0   # always the first one (the queue is FIFO)
+        event_id = report.event_id
+
+        # 3. Decide the case and execute.
+        case = None
+        inner_action = None
+        confirmed_station_id = None
+
+        # Special case: eliminated id. Rejected without touching anything.
+        if event_id in self.eliminated_IDs:
+            case = "eliminated"
+
+        # Case: unknown id → create a new event.
+        # "Unknown" = not active, not archived, not eliminated.
+        elif event_id not in self.event_index and event_id not in self.archived_history:
+            case = "created"
+            self.create_event(
+                event_id=event_id,
+                magnitude=report.magnitude,
+                depth=report.depth,
+                x=report.x,
+                y=report.y,
+                occurred_at=report.occurred_at,
+                stations={report.station},       # the set with the report's only station
+                revision=report.revision_num,    # the first revision can be > 1
+            )
+            # create_event already pushed a CreationAction. Pop it to put it
+            # inside the QueueStepAction: one queue step = one action in the
+            # stack, not two.
+            inner_action = self.undo_stack.pop()
+
+        # Case: archived id.
+        elif event_id in self.archived_history:
+            archived_event = self.archived_history[event_id]
+            if report.revision_num > archived_event.revision:
+                # A report with a greater revision REACTIVATES the archived
+                # event: it leaves archived_history and goes back to the AVL
+                # with the corrected data (section 6).
+                case = "reactivated"
+                event = self.archived_reactivation(report)
+
+                # archived_reactivation already pushed its own
+                # ReactivationAction. Pop it to put it inside the
+                # QueueStepAction, same pattern as "created" and "corrected":
+                # one queue step = one action in the stack.
+                inner_action = self.undo_stack.pop()
+
+                # Add the report's station if it was not there. This is done
+                # HERE and not inside archived_reactivation, for the same
+                # reason as in "corrected": this way we can compare
+                # before/after and know if the station was new, so we can
+                # remove it when undoing the step.
+                if report.station not in event.stations:
+                    event.stations.add(report.station)
+                    confirmed_station_id = report.station.station_id
+            elif report.revision_num == archived_event.revision:
+                # Confirmation or conflict on an archived event: does not
+                # reactivate it.
+                case = "archived_not_reactivated"
+            else:
+                case = "old"
+
+        # Case: active id.
+        else:
+            event = self.event_index[event_id].event
+
+            if report.revision_num > event.revision:
+                # Greater revision → correct.
+                case = "corrected"
+                changes = {
+                    "magnitude": report.magnitude,
+                    "depth": report.depth,
+                    "x": report.x,
+                    "y": report.y,
+                    "occurred_at": report.occurred_at,
+                }
+                self.correct_event(event_id, changes)
+                inner_action = self.undo_stack.pop()
+
+                # Add the report's station if it was not there.
+                # If adding it "had an effect", save its id so it can be
+                # removed when undoing the queue step.
+                if report.station not in event.stations:
+                    event.stations.add(report.station)
+                    confirmed_station_id = report.station.station_id
+
+            elif report.revision_num == event.revision:
+                # Same revision → same data?
+                same_data = (
+                    report.magnitude == event.magnitude
+                    and report.depth == event.depth
+                    and report.x == event.x
+                    and report.y == event.y
+                    and report.occurred_at == event.occurred_at
+                )
+                if same_data:
+                    # Confirmation.
+                    case = "confirmed"
+                    if report.station not in event.stations:
+                        event.stations.add(report.station)
+                        confirmed_station_id = report.station.station_id
+                else:
+                    # Conflict: the event is not touched.
+                    case = "conflict"
+
+            else:
+                # Lower revision → old.
+                case = "old"
+
+        # 4. Now actually remove the report from the queue.
+        self.report_queue.dequeue()
+
+        # 5. Push the step action. Even if the case did not modify anything
+        # (conflict, old, eliminated, archived not reactivated), the action
+        # saves the report and its position so it can be put back in the
+        # queue on undo.
+        self.undo_stack.push(QueueStepAction(
+            report=report,
+            queue_position=queue_position,
+            inner_action=inner_action,
+            confirmed_station_id=confirmed_station_id,
+        ))
+
+        # 6. Return info about the step, so the frontend can show what
+        # happened.
+        return {
+            "case": case,
+            "event_id": event_id,
+            "report": report,
+        }
 
     
-    """EVENT STF"""
+    """=========================================================================================="""\
+    """====================================== EVENT METHODS ======================================"""\
+    """=========================================================================================="""
 
     def create_event(self, event_id: int, magnitude: float, depth: float, x: float, y: float,
                     occurred_at, stations: set, revision: int = 1) -> Event:
-        """Operación que dispara la interfaz cuando el usuario hace clic en
-        'crear evento'. Construye el evento desde cero.
+        """Triggered by the UI when the user clicks 'create event'. Builds the
+        event from scratch.
 
-        El parámetro `revision` tiene default 1, que es el caso del alta
-        manual (sección 6: "asignar la revisión 1"). Se usa otro valor
-        cuando el evento se crea a partir de un reporte procesado, porque
-        la sección 6 dice: "la primera revisión recibida puede ser mayor
-        que 1".
+        The `revision` parameter defaults to 1, which is the manual creation
+        case (section 6: "assign revision 1"). A different value is used when
+        the event is created from a processed report, because section 6 says:
+        "the first revision received may be greater than 1".
 
-        Un evento A es candidato a referencia de B cuando tiene mayor magnitud, ocurrió estrictamente antes...
-        A = el evento que va a ser referencia (el candidato).
-        B = el evento que está siendo referenciado (el que "necesita" una referencia)."""
+        An event A is a candidate reference of B when it has greater
+        magnitude and occurred strictly before...
+        A = the event that will be the reference (the candidate).
+        B = the event being referenced (the one that "needs" a reference)."""
 
         if self._id_exists(event_id):
             raise ValueError(f"El identificador {event_id} ya existe")
 
         is_populated = self.epicenter_in_populated_zone(x, y)
 
-        # Aquí nace el evento nuevo (lo llamamos B).
+        # Here the new event is born (we call it B).
         event = Event(
             event_id=event_id, magnitude=magnitude, depth=depth,
             x=x, y=y, occurred_at=occurred_at, revision=revision,
@@ -338,40 +707,45 @@ class Scenario:
         self.bst_tree.insert(event)
         self.event_index[event_id] = node
 
-        """Buscar eventos ya existentes que ahora podrían tener a B como
-        # candidato nuevo (sección 7). Un evento X solo puede tener a B como
-        # candidato si B ocurrió ANTES que X y tiene MAYOR magnitud que X.
-        # Esto pasa con reportes tardíos: B es nuevo en el sistema pero su
-        # fecha de ocurrencia es anterior a la de eventos ya registrados."""
+        # Look for existing events that could now have B as a new candidate
+        # (section 7). An event X can only have B as a candidate if B occurred
+        # BEFORE X and has GREATER magnitude than X.
+        # This happens with late reports: B is new to the system but its
+        # occurrence time is earlier than that of already registered events.
         affected_others = [other for other in self._all_active_and_archived_events()
             if other.event_id != event_id
             and other.occurred_at > event.occurred_at
             and other.magnitude < event.magnitude
         ]
 
-        # Guardar la foto de las referencias ANTES de recalcular, para poder
-        # deshacer. B entra con None porque antes no existía. Cada otro evento
-        # afectado guarda su reference_id actual (el que va a cambiar).
+        # Save a snapshot of the references BEFORE recalculating, so we can
+        # undo. B enters with None because it did not exist before. Each other
+        # affected event saves its current reference_id (the one that will
+        # change).
         old_references = {event_id: None}
         for other in affected_others:
             old_references[other.event_id] = other.reference_id
 
-        # Recalcular la referencia de B (busca sus candidatos entre los eventos
-        # viejos) y la de cada evento afectado (ahora B aparece como candidato).
+        # Recalculate B's reference (it looks for its candidates among the old
+        # events) and the reference of each affected event (B now appears as a
+        # candidate).
         self._recalculate_reference(event)
         for other in affected_others:
             self._recalculate_reference(other)
 
-        # Apilar la acción con el id de B y la foto de referencias viejas, para
-        # que undo() pueda restaurar todo lo que esta creación cambió.
+        # Push the action with B's id and the snapshot of old references, so
+        # undo() can restore everything this creation changed.
         self.undo_stack.push(CreationAction(event_id, old_references))
 
         return event
 
     def get_event(self, event_id: int) -> dict:
-        """Metodo para buscar un evento por el id, retorna todo el obj event si es activo, y el id con su estado (eliminado o archivado)
-        si esta eliminado o archivado (archivado podria retornar el objeto completo pero por ser consistente con eliminado solo retorna el id)"""
-        # Activo
+        """Look up an event by id. Returns the whole event object if it is
+        active, and the id with its status (eliminated or archived) if it is
+        not. If archived or eliminated, only the id is returned (the archived
+        case could return the full object, but for consistency with the
+        eliminated case, only the id is returned)."""
+        # Active
         if event_id in self.event_index:
             node = self.event_index[event_id]
             event = node.event
@@ -390,7 +764,7 @@ class Scenario:
                 "balance_factor": node.balance_factor,
                 "associations": self._build_associations(event_id),
             }
-        # Archivado
+        # Archived
         if event_id in self.archived_history:
             return {
                 "status": "archived",
@@ -398,7 +772,7 @@ class Scenario:
                 "event": None,
             }
 
-        # Eliminado
+        # Eliminated
         if event_id in self.eliminated_IDs:
             return {
                 "status": "eliminated",
@@ -408,851 +782,271 @@ class Scenario:
 
         raise KeyError(f"No existe un evento con id {event_id}")
 
-    """---AUXILIARES DE EVENTOS"""
-
-    def epicenter_in_populated_zone(self, x: float, y: float) -> bool:
-        """AUXILIAR: Metodo para saber si un epicentro esta en zona poblada (Un epicentro pertenece a una zona si está dentro o sobre el borde ya se cubre en zone)
-        este metodo es el que se pasa al atributo de event: is_in_populated_zone
-        """
-        for zone in self.zones:
-            if zone.contains(x, y) and zone.is_populated:
-                return True
-        return False
-
-    def _id_exists(self, event_id: int) -> bool:
-        """AUXILIAR: Un id existe si esta en alguno de estos 3: self.event_index,  self.archived_history, self.eliminated_IDs"""
-        return (
-            event_id in self.event_index
-            or event_id in self.archived_history
-            or event_id in self.eliminated_IDs
-        )
-    def _find_any_event(self, event_id: int) -> Event:
-        """AUXILIAR: Busca un evento activo o archivado por id (no eliminados por que para el sistema no tiene sentido buscar eliminados y por que solo se retornan ids)"""
-
-        if event_id in self.event_index:
-            return self.event_index[event_id].event
-        
-        if event_id in self.archived_history:
-            return self.archived_history[event_id]
-        raise KeyError(f"No existe un evento activo o archivado con id {event_id}")
-
-    def _all_active_and_archived_events(self) -> list[Event]:
-        """AUX: Devuelve todos los eventos activos (recorrido inorden del AVL por que me dio la gana y pq devuelve ya el evento)
-        seguidos de todos los archivados. No incluye eliminados."""
-
-        events = list(self.avl_tree.inorder())
-        events.extend(self.archived_history.values())
-        return events
-
-
-    def _event_status(self, event_id: int) -> Optional[str]:
-        """Devuelve 'active', 'archived' o None si el id no está en ninguno.
-
-        Se usa para etiquetar la referencia y los candidatos en el bloque de
-        asociaciones de get_event (la sección 7 pide identificar si cada
-        resultado está activo o archivado)."""
-
-        if event_id in self.event_index:
-            return "active"
-        
-        if event_id in self.archived_history:
-            return "archived"
-        
-        return None
-    
-    """ASOCIACIONES"""
-    
-    """Los siguientes metodos corresponden a metodos auxiliares para calcular y retornar las asociaciones de un evento y poder mostrarlas cuando se haga get_event"""
-
-    """Una asociación entre eventos tiene dos partes:
-
-        La referencia elegida → "B tiene a A como posible réplica". Se guarda (Event.reference_id).
-
-        Los candidatos → "estos son todos los A que podrían ser referencia de B". 
-        Se calculan al vuelo (get_candidates)."""
-    
-    def get_candidates(self, event_id: int) -> list[Event]:
-        """Candidatos a referencia del evento `event_id`: eventos activos o
-        archivados con mayor magnitud, ocurridos estrictamente antes, dentro de
-        W horas y R km. Ordenados por criterio determinista."""
-
-        event = self._find_any_event(event_id)
-        candidates = []
-
-        for other in self._all_active_and_archived_events():
-            if other.event_id == event.event_id:
-                continue
-
-            if other.magnitude <= event.magnitude:
-                continue
-
-            if other.occurred_at >= event.occurred_at:
-                continue
-
-            #vuelve el datatime a horas y hace la diferencia entre ambos para poder saber si se pasa de la hora o no
-            horas = (event.occurred_at - other.occurred_at).total_seconds() / 3600
-            if horas > self.W:
-                continue
-
-            #calcula la distancia entre epicentros con euclides
-            distancia = ((event.x - other.x) ** 2 + (event.y - other.y) ** 2) ** 0.5
-            if distancia > self.R:
-                continue
-
-            candidates.append(other)
-
-        candidates.sort(key=lambda other: ((event.occurred_at - other.occurred_at).total_seconds() / 3600, ((event.x - other.x) ** 2 + (event.y - other.y) ** 2) ** 0.5, 
-            -other.magnitude,other.event_id,) #esto se puede cambiar pero pueeees ni q necesitaramos tanta eficiencia
-        )
-        return candidates
-    
-    """PARA LAS REFERENCIAS:"""
-    def get_reference(self, event_id: int) -> Optional[Event]:
-        """Devuelve el evento que es referencia del evento `event_id`
-        (puede estar activo o archivado), o None si no tiene referencia."""
-
-        event = self._find_any_event(event_id)
-
-        if event.reference_id is None:
-            return None
-        
-        return self._find_any_event(event.reference_id)
-
-    """INDICE INVERSO PARA REFERENCIAS Y ASOCIACIONES
-
-Es un diccionario en Scenario que va al revés de la referencia normal.
-
-Referencia normal (Event.reference_id):
-
-B (id 5) → A (id 3)
-Se lee: "el evento 5 tiene como referencia al evento 3".
-
-Índice inverso (Scenario.referenced_by):
-
-{3: {5, 8}}
-Se lee: "el evento 3 es referencia de los eventos 5 y 8".
-
-Es la misma información, pero al revés.
-
-
-Porque hay operaciones que necesitan responder: "¿quiénes me tienen como referencia?"
-
-Cuando eliminas el evento 3, tienes que encontrar rápido a todos los que dependían de él (5 y 8) para recalcularles la referencia. Dos opciones:
-
-Sin índice inverso: recorres todos los eventos activos y archivados, y para cada uno preguntas "¿tu referencia es 3?". Costo O(n) cada vez.
-
-Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. Costo O(1). """
-
-        
-    def _assign_reference(self, event: Event, new_reference_id: Optional[int]) -> None:
-            """AUXILIAR: Este es el que mantiene sincronizado Event.reference_id con referenced_by. 
-            Cada vez que la referencia de un evento cambia, este helper hace los dos cambios juntos."""
-            old_ref = event.reference_id
-
-            # If the event already had a reference, remove it from the inverse index.
-            if old_ref is not None:
-                self.referenced_by[old_ref].discard(event.event_id)
-                if not self.referenced_by[old_ref]:
-                    del self.referenced_by[old_ref]
-
-            # Apply the new reference on the event itself.
-            event.reference_id = new_reference_id
-
-            # If there is a new reference, add this event to its inverse index entry.
-            if new_reference_id is not None:
-                self.referenced_by.setdefault(new_reference_id, set()).add(event.event_id)
-
-    def _recalculate_reference(self, event: Event) -> None:
-        """AUXILIAR: Recalculate the reference of `event` from its current candidates.
-        Picks the first candidate (already sorted) or None if there is none,
-        and applies it through _assign_reference so the inverse index stays
-        in sync. SOLO MODIFICA 
-        No devuelve nada, solo modifica.
-        candidates[0] es la mejor opción porque get_candidates ya ordenó.
-        Si la lista está vacía → None. Esto cubre el caso de "el candidato anterior ya no existe" (porque se eliminó, por ejemplo).
-        Usa _assign_reference para no desincronizar referenced_by."""
-
-        candidates = self.get_candidates(event.event_id)
-        new_ref_id = candidates[0].event_id if candidates else None
-        self._assign_reference(event, new_ref_id)
-
-
-    def _build_associations(self, event_id: int) -> dict:
-        """Arma el bloque de asociaciones para get_event.
-
-        Devuelve un dict con:
-        - 'reference': el evento elegido como referencia (con su estado),
-            o None si no tiene.
-        - 'candidates': lista de candidatos (con su estado), sin incluir
-            la referencia para no duplicarla.
-
-        La referencia siempre es el primer candidato que devuelve
-        get_candidates (ya viene ordenado por el criterio), así
-        que aquí se filtra de la lista de candidatos."""
-
-        reference = self.get_reference(event_id)
-        reference_id = reference.event_id if reference is not None else None
-
-        # Bloque de referencia: None cuando el evento no tiene referencia.
-        reference_data = None
-
-        if reference is not None:
-
-            reference_data = {"event": reference,"status": self._event_status(reference_id),
-            }
-
-        # Bloque de candidatos: se salta la referencia para que no salga dos veces.
-        candidates_data = [
-            {"event": candidate, "status": self._event_status(candidate.event_id)}
-
-            for candidate in self.get_candidates(event_id)
-
-            if candidate.event_id != reference_id
-        ]
-
-        return {
-            "reference": reference_data,
-            "candidates": candidates_data,
-        }
-        
     def correct_event(self, event_id: int, changes: dict) -> Event:
-        """Corrección manual de un evento activo (PUT /events/{id}).
+            """Manual correction of an active event (PUT /events/{id}).
 
-        `changes` es un dict con los campos que se quieren tocar: magnitude,
-        depth, x, y, occurred_at. Lo que no venga en el dict se queda igual.
-        event_id no se puede corregir (es inmutable). occurred_at sí, aunque
-        no esté en K, porque afecta las asociaciones.
+            `changes` is a dict with the fields to touch: magnitude, depth, x, y,
+            occurred_at. Whatever is not in the dict keeps its current value.
+            event_id cannot be corrected (it is immutable). occurred_at can,
+            even though it is not in K, because it affects the associations.
 
-        Pasos (mismo orden que create_event, pero sobre un evento existente):
-        1. Validar que esté activo.
-        2. Guardar foto de los valores viejos.
-        3. Si cambia el epicentro, recalcular zona poblada.
-        4. Aplicar la corrección sobre el mismo objeto Event.
-        5-6. Reubicar en AVL/BST si cambió la clave.
-        7-10. Recalcular asociaciones (propia + afectados).
-        11. Apilar CorrectionAction para poder deshacer.
-        12. Devolver el evento.
-        """
+            Steps (same order as create_event, but on an existing event):
+            1. Validate that it is active.
+            2. Save a snapshot of the old values.
+            3. If the epicenter changes, recalculate populated zone.
+            4. Apply the correction on the same Event object.
+            5-6. Relocate in AVL/BST if the key changed.
+            7-10. Recalculate associations (own + affected).
+            11. Push CorrectionAction so it can be undone.
+            12. Return the event.
+            """
 
-        # 1. Validación: solo se puede corregir un evento ACTIVO.
-        if event_id in self.archived_history:
-            raise ValueError(f"El evento {event_id} está archivado, no se puede corregir")
-        if event_id in self.eliminated_IDs:
-            raise ValueError(f"El evento {event_id} está eliminado, no se puede corregir")
-        if event_id not in self.event_index:
-            raise KeyError(f"No existe un evento con id {event_id}")
+            # 1. Validation: only an ACTIVE event can be corrected.
+            if event_id in self.archived_history:
+                raise ValueError(f"El evento {event_id} está archivado, no se puede corregir")
+            if event_id in self.eliminated_IDs:
+                raise ValueError(f"El evento {event_id} está eliminado, no se puede corregir")
+            if event_id not in self.event_index:
+                raise KeyError(f"No existe un evento con id {event_id}")
 
-        node = self.event_index[event_id]
-        event = node.event
+            node = self.event_index[event_id]
+            event = node.event
 
-        # 2. Foto de los valores viejos, leídos del evento ANTES de tocarlo.
-        old_magnitude = event.magnitude
-        old_depth = event.depth
-        old_x = event.x
-        old_y = event.y
-        old_occurred_at = event.occurred_at
-        old_is_in_populated_zone = event.is_in_populated_zone
-        old_revision = event.revision
-        old_attention_status = event.attention_status
+            # 2. Snapshot of the old values, read from the event BEFORE touching it.
+            old_magnitude = event.magnitude
+            old_depth = event.depth
+            old_x = event.x
+            old_y = event.y
+            old_occurred_at = event.occurred_at
+            old_is_in_populated_zone = event.is_in_populated_zone
+            old_revision = event.revision
+            old_attention_status = event.attention_status
 
-        # 3. Si cambia x o y, hay que recalcular zona con el epicentro COMPLETO:
-        # si solo mandaron uno de los dos, el otro se completa con el valor
-        # actual del evento (mismo patrón que update_zone con sus "changes").
-        is_in_populated_zone = None
-        if "x" in changes or "y" in changes:
-            new_x = changes.get("x", event.x)
-            new_y = changes.get("y", event.y)
-            is_in_populated_zone = self.epicenter_in_populated_zone(new_x, new_y)
+            # 3. If x or y changes, the populated zone must be recalculated with
+            # the COMPLETE epicenter: if only one of the two is given, the other
+            # is filled with the event's current value (same pattern as
+            # update_zone with its "changes").
+            is_in_populated_zone = None
+            if "x" in changes or "y" in changes:
+                new_x = changes.get("x", event.x)
+                new_y = changes.get("y", event.y)
+                is_in_populated_zone = self.epicenter_in_populated_zone(new_x, new_y)
 
-        # 4. Aplicar la corrección. Muta el mismo objeto event y devuelve
-        # la clave de antes y la de después.
-        old_key, new_key = event.apply_correction(
-            magnitude=changes.get("magnitude"),
-            depth=changes.get("depth"),
-            x=changes.get("x"),
-            y=changes.get("y"),
-            occurred_at=changes.get("occurred_at"),
-            is_in_populated_zone=is_in_populated_zone,
-        )
+            # 4. Apply the correction. Mutates the same event object and returns
+            # the key before and the key after.
+            old_key, new_key = event.apply_correction(
+                magnitude=changes.get("magnitude"),
+                depth=changes.get("depth"),
+                x=changes.get("x"),
+                y=changes.get("y"),
+                occurred_at=changes.get("occurred_at"),
+                is_in_populated_zone=is_in_populated_zone,
+            )
 
-        # 5-6. Si la clave cambió (subió/bajó de prioridad, o cambió M),
-        # hay que sacarlo de los árboles con la clave vieja y reinsertarlo
-        # con la nueva. event_index se actualiza con el nodo NUEVO.
-        balance = (self.mode == Mode.NORMAL)
+            # 5-6. If the key changed (priority went up/down, or M changed), it
+            # must be removed from the trees with the old key and reinserted with
+            # the new one. event_index is updated with the NEW node.
+            balance = (self.mode == Mode.NORMAL)
 
-        if old_key != new_key:
-            self.avl_tree.delete(old_key, balance=balance)
-            self.bst_tree.delete(old_key)
-            new_node = self.avl_tree.insert(event, balance=balance)
-            self.bst_tree.insert(event)
-            self.event_index[event_id] = new_node
+            if old_key != new_key:
+                self.avl_tree.delete(old_key, balance=balance)
+                self.bst_tree.delete(old_key)
+                new_node = self.avl_tree.insert(event, balance=balance)
+                self.bst_tree.insert(event)
+                self.event_index[event_id] = new_node
 
-        # 7. Grupo 1: otros eventos que podrían haber ganado o perdido a este
-        # evento como candidato nuevo. Se usa el RANGO entre el valor viejo y
-        # el nuevo, porque:
-        #   - Si la fecha se movió a MÁS NUEVA, algunos eventos dejan de tenerlo
-        #     como candidato (estaban entre la fecha nueva y la vieja).
-        #   - Si la fecha se movió a MÁS ANTIGUA, algunos eventos lo ganan.
-        #   - Lo mismo con la magnitud: si bajó, algunos dejan de tenerlo; si
-        #     subió, algunos lo ganan.
-        # Usar min/max cubre los dos sentidos. Se recalcula de más, pero no
-        # se deja ninguna referencia desactualizada.
-        min_occurred = min(old_occurred_at, event.occurred_at)
-        max_magnitude = max(old_magnitude, event.magnitude)
+            # 7. Group 1: other events that could have gained or lost this event
+            # as a new candidate. The RANGE between the old and the new value is
+            # used, because:
+            #   - If the date moved to a MORE RECENT one, some events stop having
+            #     it as candidate (they were between the new and the old date).
+            #   - If the date moved to an OLDER one, some events gain it.
+            #   - Same with magnitude: if it went down, some stop having it; if
+            #     it went up, some gain it.
+            # Using min/max covers both directions. It recalculates a bit more,
+            # but no reference is left outdated.
+            min_occurred = min(old_occurred_at, event.occurred_at)
+            max_magnitude = max(old_magnitude, event.magnitude)
 
-        affected_group_1 = [
-            other for other in self._all_active_and_archived_events()
-            if other.event_id != event_id
-            and other.occurred_at > min_occurred
-            and other.magnitude < max_magnitude
-        ]
+            affected_group_1 = [
+                other for other in self._all_active_and_archived_events()
+                if other.event_id != event_id
+                and other.occurred_at > min_occurred
+                and other.magnitude < max_magnitude
+            ]
 
-        # 8. Grupo 2: eventos que YA tenían a este evento como referencia
-        # antes de la corrección. Se sacan del índice inverso.
-        group_2_ids = self.referenced_by.get(event_id, set())
-        affected_group_2 = [self._find_any_event(other_id) for other_id in group_2_ids]
+            # 8. Group 2: events that ALREADY had this event as reference before
+            # the correction. They are taken from the inverse index.
+            group_2_ids = self.referenced_by.get(event_id, set())
+            affected_group_2 = [self._find_any_event(other_id) for other_id in group_2_ids]
 
-        # Unión sin duplicados (un evento podría estar en los dos grupos).
-        affected_others = {other.event_id: other for other in affected_group_1 + affected_group_2}.values()
+            # Union without duplicates (an event could be in both groups).
+            affected_others = {other.event_id: other for other in affected_group_1 + affected_group_2}.values()
 
-        # 9. Foto de referencias viejas: el evento mismo + todos los afectados,
-        # ANTES de recalcular nada.
-        old_references = {event_id: event.reference_id}
-        for other in affected_others:
-            old_references[other.event_id] = other.reference_id
+            # 9. Snapshot of old references: the event itself + all the affected
+            # ones, BEFORE recalculating anything.
+            old_references = {event_id: event.reference_id}
+            for other in affected_others:
+                old_references[other.event_id] = other.reference_id
 
-        # 10. Recalcular: primero el evento mismo, luego cada afectado.
-        self._recalculate_reference(event)
-        for other in affected_others:
-            self._recalculate_reference(other)
+            # 10. Recalculate: first the event itself, then each affected one.
+            self._recalculate_reference(event)
+            for other in affected_others:
+                self._recalculate_reference(other)
 
-        # 11. Apilar la acción para poder deshacer todo esto de un solo golpe.
-        self.undo_stack.push(CorrectionAction(
-            event_id=event_id,
-            old_magnitude=old_magnitude,
-            old_depth=old_depth,
-            old_x=old_x,
-            old_y=old_y,
-            old_occurred_at=old_occurred_at,
-            old_is_in_populated_zone=old_is_in_populated_zone,
-            old_revision=old_revision,
-            old_attention_status=old_attention_status,
-            old_references=old_references,
-        ))
+            # 11. Push the action so all of this can be undone in one go.
+            self.undo_stack.push(CorrectionAction(
+                event_id=event_id,
+                old_magnitude=old_magnitude,
+                old_depth=old_depth,
+                old_x=old_x,
+                old_y=old_y,
+                old_occurred_at=old_occurred_at,
+                old_is_in_populated_zone=old_is_in_populated_zone,
+                old_revision=old_revision,
+                old_attention_status=old_attention_status,
+                old_references=old_references,
+            ))
 
-        # 12. Devolver el evento corregido.
-        return event
+            # 12. Return the corrected event.
+            return event
 
     def mark_reviewed(self, event_id: int) -> Event:
-        """Marca un evento activo como revisado (sección 'Estado de atención').
+            """Mark an active event as reviewed (section 'Attention status').
 
-        No toca P, M ni I, así que no cambia la clave, no reinserta nada en
-        los árboles, y no afecta asociaciones.
-        """
+            Does not touch P, M or I, so it does not change the key, does not
+            reinsert anything in the trees, and does not affect associations.
+            """
 
-        # 1. Validación: mismo criterio que correct_event, solo se puede
-        # marcar como revisado un evento ACTIVO.
-        if event_id in self.archived_history:
-            raise ValueError(f"El evento {event_id} está archivado, no se puede marcar como revisado")
-        if event_id in self.eliminated_IDs:
-            raise ValueError(f"El evento {event_id} está eliminado, no se puede marcar como revisado")
-        if event_id not in self.event_index:
-            raise KeyError(f"No existe un evento con id {event_id}")
+            # 1. Validation: same criterion as correct_event, only an ACTIVE
+            # event can be marked as reviewed.
+            if event_id in self.archived_history:
+                raise ValueError(f"El evento {event_id} está archivado, no se puede marcar como revisado")
+            if event_id in self.eliminated_IDs:
+                raise ValueError(f"El evento {event_id} está eliminado, no se puede marcar como revisado")
+            if event_id not in self.event_index:
+                raise KeyError(f"No existe un evento con id {event_id}")
 
-        event = self.event_index[event_id].event
-
-        # 2. Foto del valor viejo, antes de cambiarlo. Es lo único que hace
-        # falta guardar para poder deshacer.
-        old_attention_status = event.attention_status
-
-        # 3. Aplicar el cambio sobre el mismo objeto.
-        event.mark_as_reviewed()
-
-        # 4. No hay paso de árboles/event_index/asociaciones: la clave no
-        # cambió, así que la posición del evento en el AVL y el BST sigue
-        # siendo válida tal cual, y las asociaciones no dependen de este dato.
-
-        # 5. Apilar la acción para poder deshacer.
-        self.undo_stack.push(AttentionChangeAction(event_id, old_attention_status))
-
-        # 6. Devolver el evento ya marcado.
-        return event
-
-    
-    def delete_event(self, event_id: int) -> Event:
-        """Eliminación individual de un evento activo (sección 'Eliminación
-        individual'). Solo retira ESE evento; sus descendientes en el AVL
-        quedan intactos (eso lo garantiza el propio delete() del árbol).
-
-        No hay Grupo 1 aquí: un evento que se va del sistema no puede
-        volverse candidato nuevo de nadie. Solo hay que avisarle a quienes
-        YA lo tenían como referencia (Grupo 2).
-        """
-
-        # 1. Validación: mismo criterio que correct_event y mark_reviewed,
-        # solo se puede eliminar un evento ACTIVO.
-        if event_id in self.archived_history:
-            raise ValueError(f"El evento {event_id} está archivado, no se puede eliminar así")
-        if event_id in self.eliminated_IDs:
-            raise ValueError(f"El evento {event_id} ya está eliminado")
-        if event_id not in self.event_index:
-            raise KeyError(f"No existe un evento con id {event_id}")
-
-        node = self.event_index[event_id]
-        event = node.event
-        key = event.key  # se guarda ahora porque, una vez eliminado, ya no hay de dónde sacarla
-
-        # 2-3. Guardar la referencia propia ANTES de limpiarla, y limpiarla con
-        # _assign_reference (ya sabe actualizar referenced_by sin desincronizar).
-        # Si no se guarda antes, el valor se pierde en cuanto se llama.
-        old_references = {event_id: event.reference_id}
-        self._assign_reference(event, None)
-
-        # 4. Retirar el evento de las tres estructuras activas. El orden entre
-        # estas tres no importa: ya tenemos `event` guardado en una variable,
-        # no dependemos de que siga en ninguna de ellas.
-        balance = (self.mode == Mode.NORMAL)
-        self.avl_tree.delete(key, balance=balance)
-        self.bst_tree.delete(key)
-        del self.event_index[event_id]
-
-        # Registrar el id como eliminado. Esto es lo que impide que un reporte
-        # posterior lo reactive (sección "Eliminación individual").
-        self.eliminated_IDs.add(event_id)
-
-        # 5. Grupo 2: quienes YA tenían a este evento como referencia. Se
-        # consigue la lista (es solo un dict.get, no depende de los árboles),
-        # pero se RECALCULA después de que el evento ya salió del AVL/BST —
-        # si se hiciera antes, get_candidates todavía lo vería como válido y
-        # alguien terminaría apuntando a un evento que ya no existe.
-        affected_ids = self.referenced_by.get(event_id, set())
-        affected = [self._find_any_event(other_id) for other_id in affected_ids]
-
-        for other in affected:
-            old_references[other.event_id] = other.reference_id
-
-        for other in affected:
-            self._recalculate_reference(other)
-
-        # 6. Apilar la acción: el evento completo (para poder reinsertarlo tal
-        # cual al deshacer) y las referencias viejas de todos los afectados.
-        self.undo_stack.push(DeletionAction(event, old_references))
-
-        # 7. Devolver el evento ya eliminado (guardado, no el de la estructura).
-        return event
-
-    def change_parameters(self, changes: dict) -> dict:
-        """Cambia uno o varios parámetros globales (L, W, R, T).
-
-        Recibe un dict {nombre: nuevo_valor}. Valida TODOS los nombres y
-        valores antes de aplicar nada (atómico: si uno falla, ninguno se
-        cambia). Ignora los parámetros cuyo valor no cambia realmente.
-
-        Devuelve un dict solo con los parámetros que sí cambiaron.
-
-        Si cambia W o R, redefine qué eventos son candidatos entre sí, así
-        que recalcula la referencia de todos los eventos activos y
-        archivados. En ese caso, la acción guarda old_references para poder
-        deshacer. Para L y T no hay recálculo ni old_references.
-
-        W y R juntos. Si changes = {"W": 24, "R": 50} y ambos cambian:
-        W se aplica primero, se recalculan referencias, se apila acción con old_refs (antes de W).
-        Luego R, se recalculan otra vez, se apila acción con old_refs (que ya refleja el cambio de W).
-        Al deshacer, se revierte R (volviendo R al viejo y restaurando refs de después de W), luego W. \
-        Funciona, aunque recalcula dos veces.
-        """
-        valid_names = {"L", "W", "R", "T"}
-
-        # 1. Validar nombres.
-        for name in changes:
-            if name not in valid_names:
-                raise ValueError(f"Unknown parameter: {name}")
-
-        # 2. Validar valores (por si alguien llama a Scenario directamente).
-        if "L" in changes:
-            new_L = changes["L"]
-            if not isinstance(new_L, int) or isinstance(new_L, bool) or new_L < 0:
-                raise ValueError("L must be a non-negative integer")
-            
-        for name in ("W", "R", "T"):
-            if name in changes and changes[name] <= 0:
-                raise ValueError(f"{name} must be a positive number")
-
-        # 3. Aplicar solo los que cambian de verdad.
-        changed = {}
-
-        for name, new_value in changes.items():
-            old_value = getattr(self, name)
-            if old_value == new_value:
-                continue
-
-            # Foto de referencias antes de tocar el parámetro, solo si aplica.
-            old_refs = None
-            if name in ("W", "R"):
-                old_refs = {
-                    event.event_id: event.reference_id
-                    for event in self._all_active_and_archived_events()
-                }
-
-            # Aplicar el cambio.
-            setattr(self, name, new_value)
-
-            # Recalcular todas las referencias si W o R cambió.
-            if name in ("W", "R"):
-                for event in self._all_active_and_archived_events():
-                    self._recalculate_reference(event)
-
-            # Apilar la acción con el valor viejo y (si aplica) la foto previa.
-            self.undo_stack.push(
-                ParameterChangeAction(name, old_value, old_refs)
-            )
-            changed[name] = new_value
-
-        return changed
-
-    def process_next_report(self) -> dict:
-        """Procesa UN reporte de la cola (sección 8: "un reporte por paso").
-
-        Saca el primero de la cola y decide qué caso es. Los casos posibles
-        están en la tabla de la sección 6: id desconocido (crear), revisión
-        mayor (corregir), igual revisión y mismos datos (confirmar), igual
-        revisión y datos distintos (conflicto), revisión menor (antiguo), e
-        id eliminado (rechazar).
-
-        La igualdad de datos se refiere a magnitud, profundidad, epicentro
-        (x, y) y tiempo de ocurrencia. NO cuenta la estación emisora.
-
-        Aunque el reporte sea rechazado/antiguo/conflicto, se apila una
-        QueueStepAction para poder devolverlo a su posición en la cola al
-        deshacer.
-
-        ──────────────────────────────────────────────────────────────
-        El problema de las DOS acciones por un solo paso
-        ──────────────────────────────────────────────────────────────
-
-        Un paso de la cola es UNA sola acción para el usuario, pero por
-        dentro puede disparar otra operación (crear, corregir o reactivar un
-        evento). create_event, correct_event y archived_reactivation apilan
-        su propia acción al terminar. Si process_next_report además apila
-        una QueueStepAction, quedan DOS acciones en la pila por un solo
-        paso, y el usuario tendría que pulsar "deshacer" dos veces.
-
-        La solución es sacar con pop la acción interna que acaban de apilar,
-        y meterla DENTRO de la QueueStepAction. Así la pila solo ve una
-        acción por paso, pero esa acción lleva adentro todo lo necesario
-        para revertir la operación interna.
-        """
-
-        # 1. Cola vacía → no hay nada que procesar.
-        if self.report_queue.is_empty():
-            raise ValueError("No hay reportes pendientes en la cola")
-
-        # 2. Peek: miramos el primero sin sacarlo.
-        report = self.report_queue.peek()
-        queue_position = 0   # siempre el primero (la cola es FIFO)
-        event_id = report.event_id
-
-        # 3. Decidir caso y ejecutar.
-        case = None
-        inner_action = None
-        confirmed_station_id = None
-
-        # Caso especial: id eliminado. Se rechaza sin tocar nada.
-        if event_id in self.eliminated_IDs:
-            case = "eliminated"
-
-        # Caso: id desconocido → crear evento nuevo.
-        # "Desconocido" = no está activo, ni archivado, ni eliminado.
-        elif event_id not in self.event_index and event_id not in self.archived_history:
-            case = "created"
-            self.create_event(
-                event_id=event_id,
-                magnitude=report.magnitude,
-                depth=report.depth,
-                x=report.x,
-                y=report.y,
-                occurred_at=report.occurred_at,
-                stations={report.station},       # el set con la única estación del reporte
-                revision=report.revision_num,    # la primera revisión puede ser > 1
-            )
-            # create_event ya apiló una CreationAction. La sacamos para meterla
-            # dentro del QueueStepAction: un solo paso de la cola = una sola
-            # acción en la pila, no dos.
-            inner_action = self.undo_stack.pop()
-
-        # Caso: id archivado.
-        elif event_id in self.archived_history:
-            archived_event = self.archived_history[event_id]
-            if report.revision_num > archived_event.revision:
-                # Un reporte con revisión mayor REACTIVA el evento archivado:
-                # sale de archived_history y vuelve al AVL con los datos
-                # corregidos (sección 6).
-                case = "reactivated"
-                event = self.archived_reactivation(report)
-
-                # archived_reactivation ya apiló su propia ReactivationAction.
-                # La sacamos para meterla dentro del QueueStepAction, mismo
-                # patrón que "created" y "corrected": un paso de la cola = una
-                # sola acción en la pila.
-                inner_action = self.undo_stack.pop()
-
-                # Añadir la estación del reporte si aún no estaba. Va AQUÍ y no
-                # dentro de archived_reactivation, por la misma razón que en
-                # "corrected": así podemos comparar antes/después y saber si la
-                # estación era nueva, para poder quitarla al deshacer.
-                if report.station not in event.stations:
-                    event.stations.add(report.station)
-                    confirmed_station_id = report.station.station_id
-            elif report.revision_num == archived_event.revision:
-                # Confirmación o conflicto sobre un archivado: no lo reactiva.
-                case = "archived_not_reactivated"
-            else:
-                case = "old"
-
-        # Caso: id activo.
-        else:
             event = self.event_index[event_id].event
 
-            if report.revision_num > event.revision:
-                # Revisión mayor → corregir.
-                case = "corrected"
-                changes = {
-                    "magnitude": report.magnitude,
-                    "depth": report.depth,
-                    "x": report.x,
-                    "y": report.y,
-                    "occurred_at": report.occurred_at,
-                }
-                self.correct_event(event_id, changes)
-                inner_action = self.undo_stack.pop()
+            # 2. Snapshot of the old value, before changing it. It is the only
+            # thing that needs to be saved to be able to undo.
+            old_attention_status = event.attention_status
 
-                # Añadir la estación del reporte si aún no estaba.
-                # Si añadirla "tuvo efecto", guardamos su id para poder quitarla
-                # al deshacer el paso de la cola.
-                if report.station not in event.stations:
-                    event.stations.add(report.station)
-                    confirmed_station_id = report.station.station_id
+            # 3. Apply the change on the same object.
+            event.mark_as_reviewed()
 
-            elif report.revision_num == event.revision:
-                # Igual revisión → ¿mismos datos?
-                same_data = (
-                    report.magnitude == event.magnitude
-                    and report.depth == event.depth
-                    and report.x == event.x
-                    and report.y == event.y
-                    and report.occurred_at == event.occurred_at
-                )
-                if same_data:
-                    # Confirmación.
-                    case = "confirmed"
-                    if report.station not in event.stations:
-                        event.stations.add(report.station)
-                        confirmed_station_id = report.station.station_id
-                else:
-                    # Conflicto: no se toca el evento.
-                    case = "conflict"
+            # 4. No tree/event_index/associations step: the key did not change,
+            # so the event position in the AVL and BST is still valid as is, and
+            # associations do not depend on this field.
 
-            else:
-                # Revisión menor → antiguo.
-                case = "old"
+            # 5. Push the action so it can be undone.
+            self.undo_stack.push(AttentionChangeAction(event_id, old_attention_status))
 
-        # 4. Ahora sí, sacar el reporte de la cola.
-        self.report_queue.dequeue()
+            # 6. Return the event already marked.
+            return event
 
-        # 5. Apilar la acción del paso. Aunque el caso no haya modificado nada
-        # (conflicto, antiguo, eliminado, archivado sin reactivar), la acción
-        # guarda el reporte y su posición para poder devolverlo a la cola al
-        # deshacer.
-        self.undo_stack.push(QueueStepAction(
-            report=report,
-            queue_position=queue_position,
-            inner_action=inner_action,
-            confirmed_station_id=confirmed_station_id,
-        ))
+    def delete_event(self, event_id: int) -> Event:
+            """Individual deletion of an active event (section 'Individual
+            deletion'). Only removes THAT event; its descendants in the AVL stay
+            intact (guaranteed by the tree's own delete()).
 
-        # 6. Devolver info del paso, para que el frontend muestre qué pasó.
-        return {
-            "case": case,
-            "event_id": event_id,
-            "report": report,
-        }
+            There is no Group 1 here: an event that leaves the system cannot
+            become a new candidate for anyone. Only those that ALREADY had it as
+            reference need to be notified (Group 2).
+            """
 
-    def preview_branch_archive(self) -> dict:
-        """Vista previa del archivo masivo: dice QUÉ subárbol se archivaría
-        si el usuario confirma. NO modifica nada.
+            # 1. Validation: same criterion as correct_event and mark_reviewed,
+            # only an ACTIVE event can be deleted.
+            if event_id in self.archived_history:
+                raise ValueError(f"El evento {event_id} está archivado, no se puede eliminar así")
+            if event_id in self.eliminated_IDs:
+                raise ValueError(f"El evento {event_id} ya está eliminado")
+            if event_id not in self.event_index:
+                raise KeyError(f"No existe un evento con id {event_id}")
 
-        Corresponde al paso de la sección 10:
-        "Antes de ejecutar, se muestran los identificadores afectados, su
-        cantidad y la justificación de la selección."
+            node = self.event_index[event_id]
+            event = node.event
+            key = event.key  # saved now because, once deleted, there is nowhere to get it from
 
-        El frontend llama a este método para mostrar un diálogo de confirmación.
-        Si el usuario acepta, llama a branch_archive(winner_root_id) para
-        ejecutar de verdad.
+            # 2-3. Save the event's own reference BEFORE clearing it, and clear it
+            # with _assign_reference (it already knows how to update referenced_by
+            # without desyncing). If not saved first, the value is lost the moment
+            # it is called.
+            old_references = {event_id: event.reference_id}
+            self._assign_reference(event, None)
 
-        Devuelve un dict:
-        - Si no hay ramas elegibles:
-            {"eligible": False, "reason": "..."}
-        - Si hay una ganadora:
-            {
-                "eligible": True,
-                "root_id": id de la raíz del subárbol ganador,
-                "size": cantidad de nodos del ganador,
-                "depth": profundidad de la raíz del ganador,
-                "event_ids": lista con los ids de todos los eventos
-                            que se archivarían,
-            }
+            # 4. Remove the event from the three active structures. The order
+            # between these three does not matter: we already have `event` saved
+            # in a variable, we do not depend on it being in any of them.
+            balance = (self.mode == Mode.NORMAL)
+            self.avl_tree.delete(key, balance=balance)
+            self.bst_tree.delete(key)
+            del self.event_index[event_id]
 
-        Qué NO hace (importante)
-        No desprende nada del árbol. El subárbol sigue donde está.
+            # Register the id as eliminated. This is what prevents a later report
+            # from reactivating it (section 'Individual deletion').
+            self.eliminated_IDs.add(event_id)
 
-        No mueve eventos a archived_history. Todos siguen activos.
+            # 5. Group 2: those that ALREADY had this event as reference. The list
+            # is obtained (it is just a dict.get, does not depend on the trees),
+            # but it is RECALCULATED after the event has left the AVL/BST — if it
+            # were done before, get_candidates would still see it as valid and
+            # someone would end up pointing to an event that no longer exists.
+            affected_ids = self.referenced_by.get(event_id, set())
+            affected = [self._find_any_event(other_id) for other_id in affected_ids]
 
-        No saca nada de event_index.
+            for other in affected:
+                old_references[other.event_id] = other.reference_id
 
-        No toca reference_id ni referenced_by.
+            for other in affected:
+                self._recalculate_reference(other)
 
-        No apila acciones. No hay nada que deshacer porque no se cambió nada.
-        """
-        # 1. Pedirle al AVL todos los subárboles elegibles.
-        # Un subárbol es elegible si todos sus eventos tienen prioridad baja
-        # y antigüedad mayor a T horas (sección 10).
-        eligible = self.avl_tree.eligible_archive_subtrees(self.simulation_clock, self.T)
+            # 6. Push the action: the complete event (to reinsert it as-is when
+            # undoing) and the old references of all affected events.
+            self.undo_stack.push(DeletionAction(event, old_references))
 
-        # 2. Sin elegibles: informar y no tocar nada.
-        if not eligible:
-            return {"eligible": False, "reason": "No eligible branch found"}
-
-        # 3. Elegir el ganador según los criterios de la sección 10:
-        #    - mayor cantidad de nodos
-        #    - si empatan, mayor profundidad de la raíz
-        #    - si siguen empatados, mayor id de la raíz
-        # max() con una tupla compara primero por el primer elemento, luego por
-        # el segundo, luego por el tercero. Es exactamente el orden del criterio.
-        winner = max(
-            eligible,
-            key=lambda e: (e["size"], e["depth"], e["root_id"]),
-        )
-
-        # 4. Fijar la lista de ids del subárbol ganador. Es lo que se mostrará
-        # al usuario y lo que se usará al ejecutar (el conjunto se fija antes
-        # de tocar el árbol, para que rotaciones no cambien la lista).
-        event_ids = self.avl_tree.subtree_event_ids(winner["root"])
-
-        # 5. Devolver info para el frontend.
-        return {
-            "eligible": True,
-            "root_id": winner["root_id"],
-            "size": winner["size"],
-            "depth": winner["depth"],
-            "event_ids": event_ids,
-        }
-
-    def branch_archive(self, winner_root_id: int) -> dict:
-        """Ejecuta el archivo masivo del subárbol elegible cuya raíz tiene
-        id `winner_root_id` (sección 10).
-
-        Revalida el ganador: entre el preview y este llamado el árbol pudo
-        cambiar, así que recalcula elegibles y confirma que el id sigue
-        siendo elegible. Si ya no lo es, informa y conserva el estado.
-
-        Pasos:
-        1. Revalidar: recalcular elegibles y buscar el ganador con ese id.
-        2. Fijar event_ids ANTES de tocar el árbol (sección 10: 'el conjunto
-            corresponde a la topología existente al iniciar la operación y
-            se mantiene fijo durante su ejecución').
-        3. Desprender el subárbol con detach_subtree.
-        4. Capturar rotation_delta de las rotaciones que produjo detach.
-        5. Mover los eventos al histórico y sacarlos de event_index.
-            NO se tocan reference_id ni referenced_by: los archivados siguen
-            contando para asociaciones (secciones 7 y 10).
-        6. Apilar MassArchiveAction para deshacer todo como una sola acción.
-        """
-        # 1. Revalidar.
-        eligible = self.avl_tree.eligible_archive_subtrees(self.simulation_clock, self.T)
-        matches = [e for e in eligible if e["root_id"] == winner_root_id]
-
-        if not matches:
-            return {
-                "archived": False,
-                "reason": f"Subtree with root id {winner_root_id} is not eligible anymore",
-            }
-
-        winner = matches[0]
-        node = winner["root"]
-
-        # 2. Fijar ids ANTES de tocar el árbol.
-        event_ids = self.avl_tree.subtree_event_ids(node)
-
-        # 3. Desprender. En modo normal se rota; en estrés, no.
-        balance = (self.mode == Mode.NORMAL)
-        archived_root, former_parent, was_left_child = self.avl_tree.detach_subtree(
-            node, balance=balance
-        )
-
-        # 4. Capturar el delta de métricas de rotación que dejó el detach.
-        rotation_delta = self.avl_tree.last_rotation_delta()
-
-        # 5. Mover los eventos al histórico y sacarlos del índice activo.
-        events = self.avl_tree.subtree_events(archived_root)
-        for event in events:
-            self.bst_tree.delete(event.key)
-            self.archived_history[event.event_id] = event
-            del self.event_index[event.event_id]
-        # OJO: no se toca reference_id ni referenced_by (asociaciones).
-
-        # 6. Apilar la acción (una sola para todo el archivo).
-        self.undo_stack.push(MassArchiveAction(
-            archived_root=archived_root,
-            former_parent=former_parent,
-            was_left_child=was_left_child,
-            event_ids=event_ids,
-            rotation_delta=rotation_delta,
-        ))
-
-        return {
-            "archived": True,
-            "root_id": winner_root_id,
-            "size": winner["size"],
-            "depth": winner["depth"],
-            "event_ids": event_ids,
-        }
-
+            # 7. Return the event already deleted (the saved one, not the one from
+            # the structure).
+            return event
+    
     def archived_reactivation(self, report: Report) -> Event:
-        """Reactiva un evento archivado cuando llega un reporte con revisión
-        mayor que la vigente (sección 6: "Un evento archivado conserva su
-        identidad. Una revisión mayor y válida lo reactiva como pendiente en
-        el AVL con sus datos corregidos").
+        """Reactivate an archived event when a report with a greater revision
+        arrives (section 6: "An archived event keeps its identity. A valid
+        greater revision reactivates it as pending in the AVL with its
+        corrected data").
 
-        Es como un correct_event, pero partiendo de un evento que ya no está
-        en el árbol: hay que insertarlo desde cero, no reubicarlo. Por eso usa
-        apply_correction() igual que correct_event, pero el "antes" de este
-        evento es estar en archived_history, no en el AVL.
+        It is like a correct_event, but starting from an event that is no
+        longer in the tree: it must be inserted from scratch, not relocated.
+        That is why it uses apply_correction() like correct_event, but the
+        "before" of this event is being in archived_history, not in the AVL.
 
-        Pasos:
-        1. Guardar foto de los valores viejos (para poder deshacer).
-        2. Sacar el evento de archived_history.
-        3. Recalcular zona poblada con el epicentro del reporte.
-        4. Aplicar corrección con los datos del reporte y la revisión del reporte.
-        5. Insertar en AVL y BST, agregar a event_index.
-        6. Recalcular referencias (propia + afectados).
-        7. Apilar ReactivationAction para poder deshacer esta reactivación.
-        8. Devolver el evento reactivado.
+        Steps:
+        1. Snapshot of the old values (to be able to undo).
+        2. Remove the event from archived_history.
+        3. Recalculate populated zone with the report's epicenter.
+        4. Apply the correction with the report's data and the report's
+           revision.
+        5. Insert into AVL and BST, add to event_index.
+        6. Recalculate references (own + affected).
+        7. Push ReactivationAction so this reactivation can be undone.
+        8. Return the reactivated event.
 
-        OJO: a propósito NO se añade aquí la estación del reporte. Esa parte
-        se dejó para que la haga process_next_report, igual que ya hace con
-        el caso "corrected": así quien llama puede comparar antes/después y
-        saber si la estación era nueva, para registrar confirmed_station_id
-        en el QueueStepAction y poder quitarla al deshacer el paso completo.
+        NOTE: the report's station is intentionally NOT added here. That part
+        was left for process_next_report, just like the "corrected" case: that
+        way the caller can compare before/after and know if the station was
+        new, so it can register confirmed_station_id in the QueueStepAction
+        and remove it when undoing the whole step.
 
-        A diferencia de la versión anterior, esta función SÍ apila su propia
-        acción (ReactivationAction): process_next_report la saca de la pila
-        con pop(), igual que ya hace con CreationAction y CorrectionAction,
-        para meterla dentro del QueueStepAction del paso.
+        Unlike the previous version, this function DOES push its own action
+        (ReactivationAction): process_next_report pops it, just like it
+        already does with CreationAction and CorrectionAction, to put it
+        inside the QueueStepAction of the step.
         """
         event_id = report.event_id
         event = self.archived_history[event_id]
 
-        # 1. Foto de valores viejos.
+        # 1. Snapshot of old values.
         old_magnitude = event.magnitude
         old_depth = event.depth
         old_x = event.x
@@ -1262,15 +1056,15 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
         old_revision = event.revision
         old_attention_status = event.attention_status
 
-        # 2. Sacar del histórico (ya no está archivado).
+        # 2. Remove from the archive (it is no longer archived).
         del self.archived_history[event_id]
 
-        # 3. Recalcular zona poblada con el epicentro del reporte.
+        # 3. Recalculate populated zone with the report's epicenter.
         is_populated = self.epicenter_in_populated_zone(report.x, report.y)
 
-        # 4. Aplicar la corrección. El evento NO estaba en el árbol, así que
-        # el (old_key, new_key) que devuelve apply_correction no se necesita
-        # aquí (eso es para reubicar, y la inserción de abajo es desde cero).
+        # 4. Apply the correction. The event was NOT in the tree, so the
+        # (old_key, new_key) that apply_correction returns is not needed here
+        # (that is for relocating, and the insertion below is from scratch).
         event.apply_correction(
             magnitude=report.magnitude,
             depth=report.depth,
@@ -1281,15 +1075,15 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
             is_in_populated_zone=is_populated,
         )
 
-        # 5. Insertar en AVL y BST (alta, no reubicación).
+        # 5. Insert into AVL and BST (creation, not relocation).
         balance = (self.mode == Mode.NORMAL)
         node = self.avl_tree.insert(event, balance=balance)
         self.bst_tree.insert(event)
         self.event_index[event_id] = node
 
-        # 6. Recalcular referencias. Mismo esquema que correct_event:
-        # Grupo 1 (podrían tenerlo como candidato nuevo, con rango viejo-nuevo)
-        # + Grupo 2 (ya lo tenían como referencia).
+        # 6. Recalculate references. Same scheme as correct_event:
+        # Group 1 (could now have it as a new candidate, with old-new range)
+        # + Group 2 (already had it as reference).
         min_occurred = min(old_occurred_at, event.occurred_at)
         max_magnitude = max(old_magnitude, event.magnitude)
 
@@ -1308,8 +1102,8 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
             for other in affected_group_1 + affected_group_2
         }.values()
 
-        # Foto de referencias viejas, ANTES de recalcular (mismo patrón que
-        # correct_event/delete_event: el propio evento + todos los afectados).
+        # Snapshot of old references, BEFORE recalculating (same pattern as
+        # correct_event/delete_event: the event itself + all affected ones).
         old_references = {event_id: event.reference_id}
         for other in affected_others:
             old_references[other.event_id] = other.reference_id
@@ -1318,7 +1112,8 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
         for other in affected_others:
             self._recalculate_reference(other)
 
-        # 7. Apilar la acción. Es lo que faltaba: antes estos datos morían aquí.
+        # 7. Push the action. This is what was missing before: without it,
+        # these values were lost here and undo had nothing to work with.
         self.undo_stack.push(ReactivationAction(
             event_id=event_id,
             old_magnitude=old_magnitude,
@@ -1332,8 +1127,485 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
             old_references=old_references,
         ))
 
-        # 8. Devolver el evento reactivado.
+        # 8. Return the reactivated event.
         return event
+
+    """--------------------------------------- EVENT HELPERS ---------------------------------------"""
+
+    def epicenter_in_populated_zone(self, x: float, y: float) -> bool:
+        """HELPER: tells whether an epicenter is inside a populated zone. An
+        epicenter belongs to a zone if it is inside it or on its border
+        (already handled by Zone.contains). This is the value passed to the
+        event attribute: is_in_populated_zone."""
+        for zone in self.zones:
+            if zone.contains(x, y) and zone.is_populated:
+                return True
+        return False
+
+    def _id_exists(self, event_id: int) -> bool:
+        """HELPER: an id exists if it is in any of these three:
+        self.event_index, self.archived_history, self.eliminated_IDs."""
+        return (
+            event_id in self.event_index
+            or event_id in self.archived_history
+            or event_id in self.eliminated_IDs
+        )
+
+    def _find_any_event(self, event_id: int) -> Event:
+        """HELPER: looks up an active or archived event by id (not eliminated
+        events, because for the system it makes no sense to search eliminated
+        ones and because only ids are kept for them)."""
+
+        if event_id in self.event_index:
+            return self.event_index[event_id].event
+
+        if event_id in self.archived_history:
+            return self.archived_history[event_id]
+        raise KeyError(f"No existe un evento activo o archivado con id {event_id}")
+
+    def _all_active_and_archived_events(self) -> list[Event]:
+        """HELPER: returns all active events (inorder traversal of the AVL,
+        because I felt like it and because it already returns the events)
+        followed by all archived ones. Does not include eliminated events."""
+
+        events = list(self.avl_tree.inorder())
+        events.extend(self.archived_history.values())
+        return events
+    
+    def _event_status(self, event_id: int) -> Optional[str]:
+        """Returns 'active', 'archived', or None if the id is in neither.
+
+        Used to label the reference and the candidates in the associations
+        block of get_event (section 7 asks to identify whether each result is
+        active or archived)."""
+
+        if event_id in self.event_index:
+            return "active"
+
+        if event_id in self.archived_history:
+            return "archived"
+
+        return None
+    
+    """=========================================================================================="""\
+    """=================================== ASSOCIATIONS =========================================="""\
+    """=========================================================================================="""
+
+    # The following methods are helpers to compute and return the associations
+    # of an event, so they can be shown when get_event is called.
+
+    # An association between events has two parts:
+    #   - The chosen reference → "B has A as a possible replica". It is stored
+    #     (Event.reference_id).
+    #   - The candidates → "these are all the A's that could be a reference
+    #     for B". They are computed on the fly (get_candidates).
+
+    def get_candidates(self, event_id: int) -> list[Event]:
+        """Candidates to be the reference of event `event_id`: active or
+        archived events with greater magnitude, occurred strictly before,
+        within W hours and R km. Sorted by a deterministic criterion."""
+
+        event = self._find_any_event(event_id)
+        candidates = []
+
+        for other in self._all_active_and_archived_events():
+            if other.event_id == event.event_id:
+                continue
+
+            if other.magnitude <= event.magnitude:
+                continue
+
+            if other.occurred_at >= event.occurred_at:
+                continue
+
+            # Convert the datetimes to hours and get the difference between
+            # both, to know whether it exceeds the time window or not.
+            horas = (event.occurred_at - other.occurred_at).total_seconds() / 3600
+            if horas > self.W:
+                continue
+
+            # Compute the distance between epicenters with Euclidean distance.
+            distancia = ((event.x - other.x) ** 2 + (event.y - other.y) ** 2) ** 0.5
+            if distancia > self.R:
+                continue
+
+            candidates.append(other)
+
+        candidates.sort(key=lambda other: ((event.occurred_at - other.occurred_at).total_seconds() / 3600, ((event.x - other.x) ** 2 + (event.y - other.y) ** 2) ** 0.5,
+            -other.magnitude,other.event_id,) # this can be changed but well, we don't really need that much efficiency
+        )
+        return candidates
+
+    # -------------------------------- REFERENCES ---------------------------------
+
+    def get_reference(self, event_id: int) -> Optional[Event]:
+        """Return the event that is the reference of event `event_id`
+        (may be active or archived), or None if it has no reference."""
+
+        event = self._find_any_event(event_id)
+
+        if event.reference_id is None:
+            return None
+
+        return self._find_any_event(event.reference_id)
+
+    # INVERSE INDEX FOR REFERENCES AND ASSOCIATIONS
+    #
+    # It is a dictionary in Scenario that goes the reverse way of the normal
+    # reference.
+    #
+    # Normal reference (Event.reference_id):
+    #   B (id 5) -> A (id 3)
+    #   Read as: "event 5 has event 3 as its reference".
+    #
+    # Inverse index (Scenario.referenced_by):
+    #   {3: {5, 8}}
+    #   Read as: "event 3 is the reference of events 5 and 8".
+    #
+    # It is the same information, but reversed.
+    #
+    # Because some operations need to answer: "who has me as their reference?"
+    #
+    # When you delete event 3, you need to quickly find everyone that depended
+    # on it (5 and 8) to recalculate their references. Two options:
+    #
+    # Without the inverse index: you walk through all active and archived
+    # events and, for each one, ask "is your reference 3?". Cost O(n) each
+    # time.
+    #
+    # With the inverse index: you do self.referenced_by.get(3) and get
+    # {5, 8} directly. Cost O(1).
+
+    def _assign_reference(self, event: Event, new_reference_id: Optional[int]) -> None:
+        """HELPER: this is the one that keeps Event.reference_id synchronized
+        with referenced_by. Every time the reference of an event changes, this
+        helper makes both changes together."""
+        old_ref = event.reference_id
+
+        # If the event already had a reference, remove it from the inverse index.
+        if old_ref is not None:
+            self.referenced_by[old_ref].discard(event.event_id)
+            if not self.referenced_by[old_ref]:
+                del self.referenced_by[old_ref]
+
+        # Apply the new reference on the event itself.
+        event.reference_id = new_reference_id
+
+        # If there is a new reference, add this event to its inverse index entry.
+        if new_reference_id is not None:
+            self.referenced_by.setdefault(new_reference_id, set()).add(event.event_id)
+
+    def _recalculate_reference(self, event: Event) -> None:
+        """HELPER: recalculate the reference of `event` from its current
+        candidates. Picks the first candidate (already sorted) or None if
+        there is none, and applies it through _assign_reference so the inverse
+        index stays in sync. IT ONLY MODIFIES, it does not return anything.
+
+        candidates[0] is the best option because get_candidates already sorted
+        them. If the list is empty -> None. This covers the case of "the
+        previous candidate no longer exists" (because it was deleted, for
+        example). Uses _assign_reference so referenced_by stays in sync."""
+
+        candidates = self.get_candidates(event.event_id)
+        new_ref_id = candidates[0].event_id if candidates else None
+        self._assign_reference(event, new_ref_id)
+
+    def _build_associations(self, event_id: int) -> dict:
+        """Build the associations block for get_event.
+
+        Returns a dict with:
+        - 'reference': the event chosen as reference (with its status), or
+          None if it has none.
+        - 'candidates': list of candidates (with their status), excluding the
+          reference so it does not appear twice.
+
+        The reference is always the first candidate returned by get_candidates
+        (already sorted by the criterion), so here it is filtered out of the
+        candidates list."""
+
+        reference = self.get_reference(event_id)
+        reference_id = reference.event_id if reference is not None else None
+
+        # Reference block: None when the event has no reference.
+        reference_data = None
+
+        if reference is not None:
+
+            reference_data = {"event": reference, "status": self._event_status(reference_id),
+            }
+
+        # Candidates block: the reference is skipped so it does not appear twice.
+        candidates_data = [
+            {"event": candidate, "status": self._event_status(candidate.event_id)}
+
+            for candidate in self.get_candidates(event_id)
+
+            if candidate.event_id != reference_id
+        ]
+
+        return {
+            "reference": reference_data,
+            "candidates": candidates_data,
+        }
+
+    """=========================================================================================="""
+    """==================================== MASS ARCHIVE ========================================="""\
+    """=========================================================================================="""
+
+    def preview_branch_archive(self) -> dict:
+        """Preview of the mass archive: says WHICH subtree would be archived
+        if the user confirms. Does NOT modify anything.
+
+        Section 10: "Before executing, the affected identifiers, their
+        quantity, and the justification of the selection are shown."
+
+        The frontend calls this to show a confirmation dialog. If the user
+        accepts, it calls branch_archive(winner_root_id) to actually run it.
+
+        If there is no eligible branch, returns {"eligible": False, ...}.
+        Otherwise returns the winner info and the list of event ids that
+        would be archived.
+
+        What it does NOT do (important):
+        - Does not detach anything from the tree.
+        - Does not move events to archived_history.
+        - Does not touch event_index.
+        - Does not touch reference_id or referenced_by.
+        - Does not push any action (nothing changed).
+        """
+        # 1. Ask the AVL for all eligible subtrees.
+        # A subtree is eligible if all its events have low priority and
+        # age greater than T hours (section 10).
+        eligible = self.avl_tree.eligible_archive_subtrees(self.simulation_clock, self.T)
+
+        # 2. No eligible subtree: inform and do not touch anything.
+        if not eligible:
+            return {"eligible": False, "reason": "No eligible branch found"}
+
+        # 3. Pick the winner per section 10: largest node count, then
+        # deepest root, then largest root id. max() with a tuple applies
+        # the comparisons in that exact order.
+        winner = max(
+            eligible,
+            key=lambda e: (e["size"], e["depth"], e["root_id"]),
+        )
+
+        # 4. Freeze the list of ids of the winning subtree. It is what will
+        # be shown to the user and used at execution time (the set is fixed
+        # before touching the tree so rotations do not change the list).
+        event_ids = self.avl_tree.subtree_event_ids(winner["root"])
+
+        # 5. Return info for the frontend.
+        return {
+            "eligible": True,
+            "root_id": winner["root_id"],
+            "size": winner["size"],
+            "depth": winner["depth"],
+            "event_ids": event_ids,
+        }
+
+    def branch_archive(self, winner_root_id: int) -> dict:
+        """Run the mass archive of the eligible subtree whose root id is
+        `winner_root_id` (section 10).
+
+        Revalidates the winner: between the preview and this call the tree
+        may have changed, so it recalculates eligible ones and confirms the
+        id is still eligible. If it is not, it informs and keeps the state.
+
+        Steps:
+        1. Revalidate: recalculate eligible ones and find the winner with
+           that id.
+        2. Freeze event_ids BEFORE touching the tree (section 10: "the set
+           corresponds to the topology at the start of the operation and
+           stays fixed during it").
+        3. Detach the subtree with detach_subtree.
+        4. Capture rotation_delta from the rotations the detach produced.
+        5. Move the events to the archive and remove them from event_index.
+           reference_id and referenced_by are NOT touched: archived events
+           still count for associations (sections 7 and 10).
+        6. Push MassArchiveAction so it can be undone as a single action.
+        """
+        # 1. Revalidate.
+        eligible = self.avl_tree.eligible_archive_subtrees(self.simulation_clock, self.T)
+        matches = [e for e in eligible if e["root_id"] == winner_root_id]
+
+        if not matches:
+            return {
+                "archived": False,
+                "reason": f"Subtree with root id {winner_root_id} is not eligible anymore",
+            }
+
+        winner = matches[0]
+        node = winner["root"]
+
+        # 2. Freeze ids BEFORE touching the tree.
+        event_ids = self.avl_tree.subtree_event_ids(node)
+
+        # 3. Detach. In normal mode it rotates; in stress mode, it does not.
+        balance = (self.mode == Mode.NORMAL)
+        archived_root, former_parent, was_left_child = self.avl_tree.detach_subtree(
+            node, balance=balance
+        )
+
+        # 4. Capture the rotation metrics delta from the detach.
+        rotation_delta = self.avl_tree.last_rotation_delta()
+
+        # 5. Move the events to the archive and remove them from the active
+        # index. Also remove them from the BST so both trees stay in sync.
+        events = self.avl_tree.subtree_events(archived_root)
+        for event in events:
+            self.bst_tree.delete(event.key)
+            self.archived_history[event.event_id] = event
+            del self.event_index[event.event_id]
+        # NOTE: reference_id and referenced_by are NOT touched (associations).
+
+        # 6. Push the action (a single one for the whole archive).
+        self.undo_stack.push(MassArchiveAction(
+            archived_root=archived_root,
+            former_parent=former_parent,
+            was_left_child=was_left_child,
+            event_ids=event_ids,
+            rotation_delta=rotation_delta,
+        ))
+
+        return {
+            "archived": True,
+            "root_id": winner_root_id,
+            "size": winner["size"],
+            "depth": winner["depth"],
+            "event_ids": event_ids,
+        }
+
+
+    """==============================================="""
+    """========= GLOBAL RECOVERY (SECTION 8) ========="""
+    """==============================================="""
+
+    def recover_balance(self) -> dict:
+        """Global AVL recovery (section 8) as ONE undoable action (section 13).
+
+        Steps:
+        1. Snapshot of the tree shape BEFORE rotating. Saving only the root
+           is not enough: rotations change the links of those same nodes.
+        2. Repair using ONLY rotations, without emptying or rebuilding the
+           tree. Works with imbalances greater than 2.
+        3. Capture what was added to the metrics, to subtract it on undo.
+        4. Audit (verify_structure). The mode goes back to NORMAL only if
+           the audit confirms balance.
+        5. Push GlobalRecoveryAction only if something changed (rotations
+           happened or the mode changed).
+
+        The BST is not touched: it is the comparison tree, it never rotates.
+        Section 8 also says to pause report processing: in the backend there
+        is no continuous processing (each step is a request), so the UI must
+        stop its loop before calling this.
+
+        Returns a dict with the previous mode, the new mode, the rotation
+        cases, the elementary rotations, the rotation list, the metric
+        delta, the audit report, and whether the action was recorded.
+        Cost: O(n) plus rotations."""
+        previous_mode = self.mode
+
+        # 1. Snapshot BEFORE touching the tree.
+        snapshot = self.avl_tree.snapshot_topology()
+
+        # 2. Repair with rotations.
+        rotations = self.avl_tree.recover_balance()
+
+        # 3. Metric delta for this operation.
+        rotation_delta = self.avl_tree.last_rotation_delta()
+
+        # 4. Only go back to NORMAL mode if the audit confirms it.
+        audit = self.verify_structure()
+        if audit["is_valid"] and audit["is_avl"] and self.mode != Mode.NORMAL:
+            self.mode = Mode.NORMAL
+            audit = self.verify_structure()  # final report, already in normal mode
+
+        # 5. Push only if something changed.
+        recorded = bool(rotations) or self.mode != previous_mode
+        if recorded:
+            self.undo_stack.push(GlobalRecoveryAction(snapshot, rotation_delta, previous_mode))
+
+        return {
+            "previous_mode": previous_mode.value,
+            "mode": self.mode.value,
+            "cases": len(rotations),
+            "elementary_rotations": sum(len(entry["rotations"]) for entry in rotations),
+            "rotations": rotations,
+            "rotation_delta": rotation_delta,
+            "audit": audit,
+            "recorded": recorded,
+        }
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+    def undo(self) -> dict:
+        """Undo the last action pushed on the undo stack (section 13).
+
+        Pops the top action and dispatches to the right helper using
+        isinstance. Each action type has its own private helper that
+        knows how to revert it.
+
+        If the stack is empty, raises ValueError (the router translates
+        it to 409).
+
+        If the action is a type that undo() does not know how to handle,
+        it is pushed back (so it is not lost) and NotImplementedError is
+        raised.
+
+        Returns a dict with info about what was undone, so the frontend
+        can show it. For example:
+            {"undone": "creation", "event_id": 7}
+            {"undone": "parameter_change", "parameter": "W"}
+            {"undone": "clock_advance"}
+        """
+        if self.undo_stack.is_empty():
+            raise ValueError("No hay acciones para deshacer")
+
+        action = self.undo_stack.pop()
+
+        if isinstance(action, CreationAction):
+            return self._undo_creation(action)
+        elif isinstance(action, CorrectionAction):
+            return self._undo_correction(action)
+        elif isinstance(action, ReactivationAction):
+            return self._undo_reactivation(action)
+        elif isinstance(action, DeletionAction):
+            return self._undo_deletion(action)
+        elif isinstance(action, AttentionChangeAction):
+            return self._undo_attention_change(action)
+        elif isinstance(action, ParameterChangeAction):
+            return self._undo_parameter_change(action)
+        elif isinstance(action, ClockAdvanceAction):
+            return self._undo_clock_advance(action)
+        elif isinstance(action, QueueStepAction):
+            return self._undo_queue_step(action)
+        elif isinstance(action, MassArchiveAction):
+            return self._undo_mass_archive(action)
+        elif isinstance(action, GlobalRecoveryAction):
+            return self._undo_global_recovery(action)
+        elif isinstance(action, LoadAction):
+            return self._undo_load(action)
+        else:
+            # Unknown action: push it back so it is not lost.
+            self.undo_stack.push(action)
+            raise NotImplementedError(
+                f"undo() no sabe deshacer {type(action).__name__}"
+            )
+
 
     def _undo_creation(self, action: CreationAction) -> dict:
         """Deshace una creación: saca el evento de las estructuras activas
@@ -1957,103 +2229,7 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
             },
             "n_searches": n,
         } 
-        
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    """==============================================="""
-    """========RECUPERACIÓN GLOBAL (SECCIÓN 8)========"""
-    """==============================================="""
-
-    def recover_balance(self) -> dict:
-        """Recuperación global del AVL (sección 8) como UNA acción que se
-        puede deshacer (sección 13).
-
-        Pasos:
-        1. Foto de la forma del árbol ANTES de rotar
-           (avl_tree.snapshot_topology). Guardar solo la raíz no basta:
-           las rotaciones cambian los enlaces de esos mismos nodos.
-        2. Reparar SOLO con rotaciones (avl_tree.recover_balance), sin
-           vaciar ni reconstruir el árbol. Funciona con desbalances > 2.
-        3. Capturar lo que sumó a las métricas (avl_tree.last_rotation_delta)
-           para restarlo al deshacer.
-        4. Auditar (verify_structure). La sección 8 dice: "El retorno al
-           modo normal solo se completa cuando la auditoría confirma el
-           equilibrio". Por eso el modo pasa a NORMAL solo si la auditoría
-           no encontró errores ni desbalances.
-        5. Apilar GlobalRecoveryAction(snapshot, delta, modo_anterior), solo
-           si algo cambió (hubo rotaciones o cambió el modo), igual que
-           update_simulation_clock no apila un cambio que no cambió nada.
-
-        El BST no se toca: es el árbol de comparación, nunca rota.
-        La sección 8 también pide pausar el procesamiento de reportes: aquí
-        no hay procesamiento continuo en el backend (cada paso es una
-        petición), así que la interfaz debe detener su ciclo antes de
-        llamar a esta operación.
-
-        _undo_global_recovery (ya existía) la deshace: restore_topology +
-        revert_rotation_metrics + modo anterior.
-
-        Devuelve un dict para mostrar en la interfaz:
-            {"previous_mode", "mode", "cases", "elementary_rotations",
-             "rotations": [{"case", "event_id", "balance_factor",
-                            "rotations"}, ...],
-             "rotation_delta", "audit" (lo de verify_structure),
-             "recorded" (True si se apiló la acción)}
-        Costo: O(n) + rotaciones."""
-        previous_mode = self.mode
-
-        # 1. Foto ANTES de tocar el árbol.
-        snapshot = self.avl_tree.snapshot_topology()
-
-        # 2. Reparar con rotaciones.
-        rotations = self.avl_tree.recover_balance()
-
-        # 3. Delta de métricas de esta operación.
-        rotation_delta = self.avl_tree.last_rotation_delta()
-
-        # 4. Solo se vuelve a modo normal si la auditoría lo confirma.
-        audit = self.verify_structure()
-        if audit["is_valid"] and audit["is_avl"] and self.mode != Mode.NORMAL:
-            self.mode = Mode.NORMAL
-            audit = self.verify_structure()  # el reporte final ya en modo normal
-
-        # 5. Apilar solo si hubo cambios.
-        recorded = bool(rotations) or self.mode != previous_mode
-        if recorded:
-            self.undo_stack.push(GlobalRecoveryAction(snapshot, rotation_delta, previous_mode))
-
-        return {
-            "previous_mode": previous_mode.value,
-            "mode": self.mode.value,
-            "cases": len(rotations),
-            "elementary_rotations": sum(len(entry["rotations"]) for entry in rotations),
-            "rotations": rotations,
-            "rotation_delta": rotation_delta,
-            "audit": audit,
-            "recorded": recorded,
-        }
 
     """==============================================="""
     """====ESTADO COMPLETO Y CARGA (SECCIONES 12-13)==="""
@@ -2797,123 +2973,10 @@ Con índice inverso: haces self.referenced_by.get(3) y obtienes {5, 8} directo. 
 
 
 
-    def update_station(self, station_id: str, changes: dict) -> Station:
-        """This method is called to update the data of a station that already exists"""
-        current_station = self.get_station(station_id)
-        #Either we put the new values, or if there isn't a new value, the old one remains
-        updated_values = {
-            "station_id": changes.get("station_id", current_station.station_id),
-            "x": changes.get("x", current_station.x),
-            "y": changes.get("y", current_station.y),
-        }
-
-        if updated_values["station_id"] != station_id and any(
-            existing_id == updated_values["station_id"] for existing_id in self.stations
-        ):
-            raise ValueError("A station with this id already exists")
-        
-        #The old instance gets replaced with the new one in the same index that the old one used to be
-
-        updated_station = Station(**updated_values)
-        if updated_station.station_id != station_id:
-            del self.stations[station_id]
-        self.stations[updated_station.station_id] = updated_station
-        return updated_station
-
-    def delete_station(self, station_id: str) -> None:
-        """This method deletes a station"""
-        self.get_station(station_id)
-        del self.stations[station_id]
 
 
-    """==============================================="""
-    """================REPORT METHODS================="""
-    """==============================================="""
 
-    # The queue only stores PREPARED reports: enqueueing does not touch
-    # events or trees. The decision for each report (section 6 table) is
-    # made when processing it, in process_next_report().
-    #
-    # Team decisions (Sep-29):
-    # - Reports with a timestamp later than the clock are rejected at
-    #   ENQUEUE time.
-    # - A queued report cannot be removed individually; only the whole
-    #   queue can be cleared.
 
-    def _validate_report(self, report: Report) -> None:
-        """Validations for a report that depend on the scenario state.
-        Ranges and formats were already validated by the schema
-        (ReportCreate).
-        Raises KeyError if the station is not registered, and ValueError
-        if the occurrence time is later than the simulation clock."""
-        station_id = report.station.station_id
-        if self.stations.get(station_id) is not report.station:
-            raise KeyError(f"Station '{station_id}' was not found")
-
-        if self._as_utc(report.occurred_at) > self.simulation_clock:
-            raise ValueError(
-                f"Report for event {report.event_id} occurred after the "
-                f"simulation clock ({self.simulation_clock.replace(microsecond=0).isoformat()})"
-            )
-
-    def next_report_revision(self, event_id: int, preceding_reports: Optional[list[Report]] = None,) -> int:
-        """Return the next revision after the latest queued or staged report.
-
-        If this event has no pending report, continue from its current active
-        or archived revision. A new event starts at revision 1.
-        """
-        queued_and_staged = self.report_queue.items() + (preceding_reports or [])
-        for report in reversed(queued_and_staged):
-            if report.event_id == event_id:
-                return report.revision_num + 1
-
-        node = self.event_index.get(event_id)
-        if node is not None:
-            return node.event.revision + 1
-
-        archived_event = self.archived_history.get(event_id)
-        if archived_event is not None:
-            return archived_event.revision + 1
-
-        return 1
-
-    def enqueue_report(self, report: Report) -> int:
-        """Append a report to the end of the FIFO queue and return its
-        position (1 = the next one to be processed). If the report is not
-        valid, raises the exception from _validate_report and the queue
-        stays unchanged. O(1)."""
-        self._validate_report(report)
-        self.report_queue.enqueue(report)
-        return len(self.report_queue)
-
-    def enqueue_reports(self, reports: list[Report]) -> int:
-        """Enqueue a burst of reports in the order received, atomically:
-        first validate ALL of them, and only if every one is valid, enqueue
-        them. So an error on report 5 does not leave the first 4 enqueued.
-        Returns the position of the first report of the burst. O(N)."""
-        for report in reports:
-            self._validate_report(report)
-
-        first_position = len(self.report_queue) + 1
-        for report in reports:
-            self.report_queue.enqueue(report)
-        return first_position
-
-    def list_reports(self) -> list[Report]:
-        """Copy of the queue in reception order (the first one is the next
-        to be processed). It is a copy: modifying the list does not alter
-        the queue. O(n)."""
-        return self.report_queue.items()
-
-    def clear_report_queue(self) -> int:
-        """Discard all pending reports and return how many there were.
-        Does not touch events, trees, or the clock.
-
-        PENDING (team decision): for now this is NOT recorded on the undo
-        stack. The statement does not list "clear the queue" among the
-        section 13 actions, but the queue IS part of the recoverable
-        state."""
-        return self.report_queue.clear()
     
     """==============================================="""
     """============TREE STATE (VISTAS)================"""
