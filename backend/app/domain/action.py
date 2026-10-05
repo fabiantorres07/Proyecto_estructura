@@ -156,6 +156,7 @@ class CorrectionAction:
         old_revision: int,
         old_attention_status,
         old_references: dict[int, int | None],
+        counter_delta: Optional[dict[str, int]] = None,
     ):
         self.event_id = event_id
         self.old_magnitude = old_magnitude
@@ -167,6 +168,9 @@ class CorrectionAction:
         self.old_revision = old_revision
         self.old_attention_status = old_attention_status
         self.old_references = old_references
+        # Lo que esta corrección sumó a los contadores de la sección 14
+        # ({"corrections_accepted": 1}). Se resta al deshacer.
+        self.counter_delta = counter_delta or {}
 
 
 class ReactivationAction:
@@ -202,6 +206,7 @@ class ReactivationAction:
         old_revision: int,
         old_attention_status,
         old_references: dict[int, int | None],
+        counter_delta: Optional[dict[str, int]] = None,
     ):
         self.event_id = event_id
         self.old_magnitude = old_magnitude
@@ -213,6 +218,9 @@ class ReactivationAction:
         self.old_revision = old_revision
         self.old_attention_status = old_attention_status
         self.old_references = old_references
+        # Lo que esta reactivación sumó a los contadores de la sección 14
+        # ({"corrections_accepted": 1}). Se resta al deshacer.
+        self.counter_delta = counter_delta or {}
 
 
 class DeletionAction:
@@ -232,15 +240,20 @@ class MassArchiveAction:
 
     rotation_delta: lo que sumó detach_subtree a las métricas de rotación.
     Se resta al deshacer con avl_tree.revert_rotation_metrics(delta).
+
+    counter_delta: lo que sumó el archivo a los contadores de la sección 14
+    ({"mass_archives": 1, "archived_events": tamaño de la rama}). Se resta
+    al deshacer con Scenario._revert_counters(delta).
     """
     def __init__(self, archived_root: AVLNode, former_parent: Optional[AVLNode],
                  was_left_child: Optional[bool], event_ids: list[int],
-                 rotation_delta: dict = None):
+                 rotation_delta: dict = None, counter_delta: dict = None):
         self.archived_root = archived_root
         self.former_parent = former_parent
         self.was_left_child = was_left_child
         self.event_ids = event_ids
         self.rotation_delta = rotation_delta or {}
+        self.counter_delta = counter_delta or {}
         
 class ParameterChangeAction:
     """Guarda el nombre del parámetro global (L, W, R o T), su valor
@@ -322,8 +335,13 @@ class QueueStepAction:
         queue_position: int,
         inner_action: Optional[CreationAction | CorrectionAction | ReactivationAction] = None,
         confirmed_station_id: Optional[int] = None,
+        counter_delta: Optional[dict[str, int]] = None,
     ):
         self.report = report
         self.queue_position = queue_position
         self.inner_action = inner_action
         self.confirmed_station_id = confirmed_station_id
+        # Lo que sumó el PROPIO paso a los contadores de la sección 14
+        # (conflicto o reporte descartado). Una corrección o reactivación
+        # interna guarda su conteo en inner_action, no aquí.
+        self.counter_delta = counter_delta or {}

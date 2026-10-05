@@ -22,6 +22,22 @@ from app.structures.avl_node import AVLNode
 from app.structures.bst_node import BSTNode
 from app.structures.bst_tree import BSTTree
 
+# Contadores de la sección 14 (además de los de rotación, que los crea
+# AVLTree). Viven en el mismo diccionario self.metrics, así que se exportan,
+# se cargan y se restauran con el resto del estado. Al deshacer, cada acción
+# resta lo que sumó (counter_delta), igual que rotation_delta.
+#   corrections_accepted: correcciones aplicadas (manuales, por reporte y
+#                         reactivaciones de archivados).
+#   reports_discarded:    reportes rechazados al procesar la cola (antiguo,
+#                         id eliminado, archivado no reactivado).
+#   conflicts:            reportes con igual revisión y datos distintos.
+#   mass_archives:        archivos masivos ejecutados.
+#   archived_events:      eventos enviados al histórico por archivos masivos
+#                         (acumulado; los archivados actuales son
+#                         len(archived_history)).
+COUNTER_KEYS = ("corrections_accepted", "reports_discarded", "conflicts",
+                "mass_archives", "archived_events")
+
 """==========================================================================================
 INFRASTRUCTURE: Methods that are important for the project but are not specific to any class
 ============================================================================================="""
@@ -55,6 +71,10 @@ class Scenario:
         self.stations = stations if stations is not None else dict()
         self.event_index = event_index if event_index is not None else dict()
         self.metrics = metrics if metrics is not None else dict()
+        # Contadores de la sección 14 en 0 si no vienen (por ejemplo, al
+        # cargar un archivo guardado antes de que existieran).
+        for counter_key in COUNTER_KEYS:
+            self.metrics.setdefault(counter_key, 0)
 
         # AVLTree must receive self.metrics after it is created, so both
         # share the same metrics dictionary (single source of truth).
@@ -71,6 +91,17 @@ class Scenario:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("Event and report timestamps must include a timezone")
         return value.astimezone(timezone.utc)
+
+    def _add_counters(self, delta: dict) -> None:
+        """AUXILIAR: suma `delta` a los contadores de la sección 14. Quien
+        lo llama guarda el mismo delta en su acción para poder restarlo."""
+        for counter_key, amount in delta.items():
+            self.metrics[counter_key] = self.metrics.get(counter_key, 0) + amount
+
+    def _revert_counters(self, delta: dict) -> None:
+        """AUXILIAR: resta el delta que guardó una acción (al deshacer)."""
+        for counter_key, amount in delta.items():
+            self.metrics[counter_key] = self.metrics.get(counter_key, 0) - amount
 
     """==============================================="""
     """=================MODE METHODS=================="""
@@ -667,6 +698,16 @@ class Scenario:
                 # Lower revision → old.
                 case = "old"
 
+        # Contadores de la sección 14 propios del paso. Las correcciones y
+        # reactivaciones ya se contaron dentro de correct_event /
+        # archived_reactivation (y su delta viaja en inner_action).
+        counter_delta = {}
+        if case == "conflict":
+            counter_delta["conflicts"] = 1
+        elif case in ("old", "eliminated", "archived_not_reactivated"):
+            counter_delta["reports_discarded"] = 1
+        self._add_counters(counter_delta)
+
         # 4. Now actually remove the report from the queue.
         self.report_queue.dequeue()
 
@@ -679,6 +720,7 @@ class Scenario:
             queue_position=queue_position,
             inner_action=inner_action,
             confirmed_station_id=confirmed_station_id,
+            counter_delta=counter_delta,
         ))
 
         # 6. Return info about the step, so the frontend can show what
@@ -829,6 +871,15 @@ class Scenario:
             if event_id not in self.event_index:
                 raise KeyError(f"No existe un evento con id {event_id}")
 
+            # La fecha corregida no puede ser posterior al reloj (sección 3).
+            # Se valida aquí, antes de modificar nada.
+            if changes.get("occurred_at") is not None:
+                if self._as_utc(changes["occurred_at"]) > self.simulation_clock:
+                    raise ValueError(
+                        f"La fecha corregida del evento {event_id} es posterior "
+                        f"al reloj de simulación"
+                    )
+
             node = self.event_index[event_id]
             event = node.event
 
@@ -914,6 +965,10 @@ class Scenario:
             for other in affected_others:
                 self._recalculate_reference(other)
 
+            # Contador de la sección 14: una corrección aceptada más.
+            counter_delta = {"corrections_accepted": 1}
+            self._add_counters(counter_delta)
+
             # 11. Push the action so all of this can be undone in one go.
             self.undo_stack.push(CorrectionAction(
                 event_id=event_id,
@@ -926,6 +981,7 @@ class Scenario:
                 old_revision=old_revision,
                 old_attention_status=old_attention_status,
                 old_references=old_references,
+                counter_delta=counter_delta,
             ))
 
             # 12. Return the corrected event.
@@ -1132,6 +1188,11 @@ class Scenario:
         for other in affected_others:
             self._recalculate_reference(other)
 
+        # Contador de la sección 14: una reactivación es una revisión mayor
+        # aceptada, así que cuenta como corrección aceptada.
+        counter_delta = {"corrections_accepted": 1}
+        self._add_counters(counter_delta)
+
         # 7. Push the action. This is what was missing before: without it,
         # these values were lost here and undo had nothing to work with.
         self.undo_stack.push(ReactivationAction(
@@ -1145,6 +1206,7 @@ class Scenario:
             old_revision=old_revision,
             old_attention_status=old_attention_status,
             old_references=old_references,
+            counter_delta=counter_delta,
         ))
 
         # 8. Return the reactivated event.
@@ -1481,6 +1543,11 @@ class Scenario:
             del self.event_index[event.event_id]
         # NOTE: reference_id and referenced_by are NOT touched (associations).
 
+        # Contadores de la sección 14: un archivo masivo más y los eventos
+        # que se fueron al histórico.
+        counter_delta = {"mass_archives": 1, "archived_events": len(event_ids)}
+        self._add_counters(counter_delta)
+
         # 6. Push the action (a single one for the whole archive).
         self.undo_stack.push(MassArchiveAction(
             archived_root=archived_root,
@@ -1488,6 +1555,7 @@ class Scenario:
             was_left_child=was_left_child,
             event_ids=event_ids,
             rotation_delta=rotation_delta,
+            counter_delta=counter_delta,
         ))
 
         return {
@@ -1692,6 +1760,8 @@ class Scenario:
         for other_id, old_ref in action.old_references.items():
             self._assign_reference(self._find_any_event(other_id), old_ref)
 
+        self._revert_counters(action.counter_delta)
+
         return {"undone": "correction", "event_id": event_id}
     
     def _undo_reactivation(self, action: ReactivationAction) -> dict:
@@ -1735,6 +1805,8 @@ class Scenario:
 
         for other_id, old_ref in action.old_references.items():
             self._assign_reference(self._find_any_event(other_id), old_ref)
+
+        self._revert_counters(action.counter_delta)
 
         return {"undone": "reactivation", "event_id": event_id}
 
@@ -1823,7 +1895,11 @@ class Scenario:
                     f"QueueStepAction con inner_action de tipo {type(inner).__name__}"
                 )
 
-        # 3. Devolver el reporte a la cola.
+        # 3. Restar los contadores propios del paso (conflicto o descartado).
+        # Los de inner_action ya los restó su propio _undo_*.
+        self._revert_counters(action.counter_delta)
+
+        # 4. Devolver el reporte a la cola.
         self.report_queue.insert_at(action.queue_position, action.report)
 
         return {"undone": "queue_step", "event_id": action.report.event_id}
@@ -1857,6 +1933,7 @@ class Scenario:
                 del self.archived_history[event_id]
 
         self.avl_tree.revert_rotation_metrics(action.rotation_delta)
+        self._revert_counters(action.counter_delta)
 
         root_id = action.event_ids[0] if action.event_ids else None
         return {"undone": "mass_archive", "root_id": root_id}
@@ -2192,6 +2269,40 @@ class Scenario:
         for event in self._all_active_and_archived_events():
             counts[f"P{event.priority}"] += 1
         return counts
+
+    def get_indicators(self) -> dict:
+        """Indicadores de la sección 14 en un solo diccionario, para que la
+        interfaz los mantenga visibles (GET /indicators):
+
+        - Cantidad de eventos activos, archivados (históricos) y eliminados,
+          altura, hojas y los cuatro recorridos del AVL (como ids).
+        - Contadores: correcciones aceptadas, reportes descartados,
+          conflictos, archivos masivos y eventos archivados (COUNTER_KEYS).
+        - Casos LL, RR, LR, RL y giros simples (ROTATION_METRIC_KEYS).
+        - Eventos por prioridad (activos + archivados), pendientes de
+          atención (activos) y eventos con acceso costoso (con el L vigente).
+
+        Solo lee: no modifica nada ni apila acciones. Costo: O(n + a)."""
+        active_events = self.avl_tree.inorder()
+        pending = sum(
+            1 for event in active_events
+            if event.attention_status == AttentionStatus.PENDING
+        )
+        return {
+            "mode": self.mode.value,
+            "L": self.L,
+            "active_events": len(self.avl_tree),
+            "archived_events": len(self.archived_history),
+            "eliminated_events": len(self.eliminated_IDs),
+            "height": self.avl_tree.height(),
+            "leaves": self.avl_tree.count_leaves(),
+            "traversals": self._traversal_ids(self.avl_tree),
+            "counters": {k: self.metrics.get(k, 0) for k in COUNTER_KEYS},
+            "rotations": {k: self.metrics.get(k, 0) for k in ROTATION_METRIC_KEYS},
+            "events_by_priority": self.count_events_by_priority(),
+            "pending_attention": pending,
+            "costly_access": len(self.avl_tree.costly_access(self.L)),
+        }
 
     def compare_avl_bst(self) -> dict:
         """Compara AVL vs BST: altura, hojas y comparaciones al buscar las
@@ -3157,6 +3268,7 @@ class Scenario:
             "nodes": nodes,
             "traversals": self._traversal_ids(tree),
             "rotation_metrics": {k: self.metrics.get(k, 0) for k in ROTATION_METRIC_KEYS},
+            "counters": {k: self.metrics.get(k, 0) for k in COUNTER_KEYS},
         }
 
     def _collect_avl_rows(self, node, parent_id, depth, rows):

@@ -10,6 +10,7 @@ from app.domain.report import Report
 from app.domain.scenario import Scenario
 from app.schemas.event import (
     EventCreate,
+    EventCorrection,
     BranchArchivePreviewResponse,
     BranchArchiveResponse,
     EventAssociationsResponse,
@@ -288,6 +289,21 @@ def get_event(
             detail=f"Event {event_id} is not active",
         )
     return _event_response(result["event"])
+
+
+@router.patch("/{event_id}", response_model=EventResponse)
+def correct_event(
+    event_id: int,
+    data: EventCorrection,
+    scenario: Scenario = Depends(get_scenario),
+):
+    """Corrección manual de un evento activo (sección 6: "r + 1"). Solo se
+    cambian los campos enviados. Se puede deshacer con POST /undo."""
+    try:
+        event = scenario.correct_event(event_id, data.model_dump(exclude_unset=True))
+        return _event_response(event)
+    except (KeyError, ValueError) as error:
+        _raise_http(error)
 
 
 @router.delete("/{event_id}", status_code=status.HTTP_204_NO_CONTENT)

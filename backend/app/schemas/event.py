@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.schemas.report import ReportCreate
+from app.schemas.report import ReportCreate, _check_one_decimal
 
 
 class EventCreate(ReportCreate):
@@ -22,6 +22,51 @@ class EventResponse(BaseModel):
     attention_status: Literal["pending", "reviewed"]
     is_in_populated_zone: bool
     priority: int
+
+
+class EventCorrection(BaseModel):
+    """Corrección manual de un evento activo (PATCH /events/{id}).
+
+    Todos los campos son opcionales: solo se cambia lo que se envía. Mismos
+    rangos y formatos que ReportCreate (un decimal, fecha con zona horaria y
+    precisión de segundos, normalizada a UTC). El id no se corrige: es
+    inmutable. Que la fecha no sea posterior al reloj lo valida Scenario,
+    porque depende del estado."""
+
+    magnitude: float | None = Field(default=None, ge=-2.0, le=10.0, allow_inf_nan=False)
+    depth: float | None = Field(default=None, ge=0.0, le=700.0, allow_inf_nan=False)
+    x: float | None = Field(default=None, ge=0.0, le=1000.0, allow_inf_nan=False)
+    y: float | None = Field(default=None, ge=0.0, le=1000.0, allow_inf_nan=False)
+    occurred_at: datetime | None = None
+
+    @field_validator("magnitude", "depth", "x", "y", "occurred_at", mode="before")
+    @classmethod
+    def reject_null_values(cls, value):
+        # Mismo criterio que ParameterUpdate: un campo enviado como null es
+        # un error; para no cambiarlo basta con no enviarlo.
+        if value is None:
+            raise ValueError("Correction values cannot be null")
+        return value
+
+    @field_validator("magnitude", "depth", "x", "y")
+    @classmethod
+    def one_decimal(cls, value: float) -> float:
+        return _check_one_decimal(value)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def utc_with_seconds_precision(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("occurred_at must include a timezone")
+        if value.microsecond != 0:
+            raise ValueError("occurred_at must have a precision of seconds")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def at_least_one_field(self):
+        if not self.model_fields_set:
+            raise ValueError("At least one field must be corrected")
+        return self
 
 
 class EventStatusUpdate(BaseModel):
