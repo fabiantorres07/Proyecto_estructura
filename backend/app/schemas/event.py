@@ -74,3 +74,30 @@ class EventDirectoryRow(BaseModel):
     occurred_at: datetime | None = None
     node_depth: int | None = None
     cost: int | None = None
+
+
+class BranchArchivePreviewResponse(BaseModel):
+    eligible: bool
+    reason: str | None = None
+    root_id: int | None = None
+    size: int | None = None
+    depth: int | None = None
+    event_ids: list[int] = Field(default_factory=list)
+
+
+class BranchArchiveRotation(BaseModel):
+    case: str
+    event_id: int
+    balance_factor: int
+    rotations: list[str]
+
+
+class BranchArchiveResponse(BaseModel):
+    archived: bool
+    reason: str | None = None
+    root_id: int | None = None
+    size: int | None = None
+    depth: int | None = None
+    event_ids: list[int] = Field(default_factory=list)
+    rotations: list[BranchArchiveRotation] = Field(default_factory=list)
+    rotation_delta: dict[str, int] = Field(default_factory=dict)

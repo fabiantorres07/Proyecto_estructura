@@ -6,12 +6,24 @@ import { EventDirectoryRow } from "../models/Event/EventDirectoryRow";
 import { EventQueryResponse } from "../models/Event/EventQueryResponse";
 import { CostlyAccessEventResponse } from "../models/Event/CostlyAccessEventResponse";
 import { EventTreesResponse } from "../models/Event/EventTreesResponse";
+import { BranchArchivePreview } from "../models/Event/BranchArchivePreview";
+import { BranchArchiveResult } from "../models/Event/BranchArchiveResult";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/events`;
 
 class EventService {
     async getTrees(): Promise<EventTreesResponse> {
         const response = await axios.get<EventTreesResponse>(`${API_URL}/trees`);
+        return response.data;
+    }
+
+    async previewBranchArchive(): Promise<BranchArchivePreview> {
+        const response = await axios.post<BranchArchivePreview>(`${API_URL}/archive/preview`);
+        return response.data;
+    }
+
+    async archiveBranch(rootId: number): Promise<BranchArchiveResult> {
+        const response = await axios.post<BranchArchiveResult>(`${API_URL}/archive/${rootId}`);
         return response.data;
     }
 

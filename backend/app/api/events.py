@@ -10,6 +10,8 @@ from app.domain.report import Report
 from app.domain.scenario import Scenario
 from app.schemas.event import (
     EventCreate,
+    BranchArchivePreviewResponse,
+    BranchArchiveResponse,
     EventAssociationsResponse,
     EventDirectoryRow,
     EventQueryResponse,
@@ -249,6 +251,25 @@ def query_event_associations(
             for item in associations["used_as_reference_by"]
         ],
     }
+
+
+@router.post("/archive/preview", response_model=BranchArchivePreviewResponse)
+def preview_branch_archive(scenario: Scenario = Depends(get_scenario)):
+    return scenario.preview_branch_archive()
+
+
+@router.post(
+    "/archive/{winner_root_id}",
+    response_model=BranchArchiveResponse,
+)
+def archive_branch(
+    winner_root_id: int,
+    scenario: Scenario = Depends(get_scenario),
+):
+    try:
+        return scenario.branch_archive(winner_root_id)
+    except (KeyError, ValueError) as error:
+        _raise_http(error)
 
 
 @router.get("/{event_id}", response_model=EventResponse)

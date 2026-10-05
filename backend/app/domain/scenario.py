@@ -1453,6 +1453,8 @@ class Scenario:
             return {
                 "archived": False,
                 "reason": f"Subtree with root id {winner_root_id} is not eligible anymore",
+                "rotations": [],
+                "rotation_delta": {},
             }
 
         winner = matches[0]
@@ -1494,6 +1496,8 @@ class Scenario:
             "size": winner["size"],
             "depth": winner["depth"],
             "event_ids": event_ids,
+            "rotations": list(self.avl_tree.last_rotations),
+            "rotation_delta": rotation_delta,
         }
 
 

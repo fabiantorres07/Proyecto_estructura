@@ -1,10 +1,10 @@
 import { hierarchy, tree } from "d3-hierarchy";
-import { ListFilter, MessageSquareText, Plus, RefreshCw, RotateCw } from "lucide-react";
+import { Archive, ListFilter, MessageSquareText, Plus, RefreshCw, RotateCw } from "lucide-react";
 import { KeyboardEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import Swal from "sweetalert2";
 import { EventTreeNode } from "../../models/Event/EventTreeNode";
 import { EventTreesResponse } from "../../models/Event/EventTreesResponse";
-import { BalanceRecovery } from "../../models/Mode/BalanceRecovery";
 import { eventService } from "../../services/eventService";
 import { modeService } from "../../services/modeService";
 import { SCENARIO_UNDONE_EVENT } from "../../services/undoService";
@@ -21,6 +21,20 @@ const NODE_X_GAP = 190;
 const NODE_Y_GAP = 132;
 const HORIZONTAL_PADDING = 40;
 const VERTICAL_PADDING = 32;
+
+interface RotationLogEntry {
+    recordedAt: Date;
+    title: string;
+    cases: number;
+    elementaryRotations: number;
+    mode?: string;
+    rotations: {
+        case: string;
+        event_id: number;
+        balance_factor: number;
+        rotations: string[];
+    }[];
+}
 
 const TreePanel: React.FC<TreePanelProps> = ({ title, rootNode }) => {
     const navigate = useNavigate();
@@ -136,10 +150,8 @@ const EventTrees = () => {
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [isRecovering, setIsRecovering] = useState(false);
-    const [rotationHistory, setRotationHistory] = useState<{
-        recordedAt: Date;
-        result: BalanceRecovery;
-    }[]>([]);
+    const [isArchiving, setIsArchiving] = useState(false);
+    const [rotationHistory, setRotationHistory] = useState<RotationLogEntry[]>([]);
     const navigate = useNavigate();
 
     const loadTrees = async () => {
@@ -166,7 +178,14 @@ const EventTrees = () => {
         setError(null);
         try {
             const result = await modeService.recoverBalance();
-            setRotationHistory((history) => [...history, { recordedAt: new Date(), result }]);
+            setRotationHistory((history) => [...history, {
+                recordedAt: new Date(),
+                title: "Recuperación global AVL",
+                cases: result.cases,
+                elementaryRotations: result.elementary_rotations,
+                mode: result.mode,
+                rotations: result.rotations,
+            }]);
             await loadTrees();
             if (!result.audit.is_valid || !result.audit.is_avl) {
                 setError("La recuperación terminó, pero la auditoría aún detecta problemas en el AVL.");
@@ -175,6 +194,62 @@ const EventTrees = () => {
             setError(getApiErrorMessage(recoveryError, "No se pudo balancear el AVL"));
         } finally {
             setIsRecovering(false);
+        }
+    };
+
+    const archiveEligibleBranch = async () => {
+        setIsArchiving(true);
+        setError(null);
+        try {
+            const preview = await eventService.previewBranchArchive();
+            if (!preview.eligible || preview.root_id == null || preview.size == null || preview.depth == null) {
+                await Swal.fire({
+                    title: "No hay un subárbol elegible",
+                    text: preview.reason ?? "No se encontró una rama que cumpla las condiciones de archivo.",
+                    icon: "info",
+                });
+                return;
+            }
+
+            const eventIds = preview.event_ids.map((eventId) => `SIS-${eventId}`).join(", ");
+            const confirmation = await Swal.fire({
+                title: "Archivar subárbol",
+                text: `Raíz SIS-${preview.root_id} · ${preview.size} eventos · profundidad ${preview.depth}. Eventos: ${eventIds}`,
+                icon: "warning",
+                showCancelButton: true,
+                confirmButtonText: "Archivar",
+                cancelButtonText: "Cancelar",
+            });
+            if (!confirmation.isConfirmed) return;
+
+            const result = await eventService.archiveBranch(preview.root_id);
+            if (!result.archived) {
+                setError(result.reason ?? "El subárbol dejó de ser elegible después de la vista previa.");
+                await loadTrees();
+                return;
+            }
+
+            const elementaryRotations = result.rotations.reduce(
+                (total, item) => total + item.rotations.length,
+                0,
+            );
+            setRotationHistory((history) => [...history, {
+                recordedAt: new Date(),
+                title: `Archivo del subárbol SIS-${result.root_id ?? preview.root_id}`,
+                cases: result.rotations.length,
+                elementaryRotations,
+                rotations: result.rotations,
+            }]);
+            await loadTrees();
+            await Swal.fire({
+                title: "Subárbol archivado",
+                text: `${result.size} eventos movidos al archivo. ${elementaryRotations} giros AVL realizados.`,
+                icon: "success",
+            });
+        } catch (archiveError) {
+            setError(getApiErrorMessage(archiveError, "No se pudo archivar el subárbol"));
+        } finally {
+            setIsArchiving(false);
         }
     };
 
@@ -191,6 +266,15 @@ const EventTrees = () => {
                     </button>
                     <button type="button" onClick={() => void loadTrees()} title="Actualizar árboles" aria-label="Actualizar árboles" className="inline-flex h-10 w-10 items-center justify-center border border-stroke text-gray-600 hover:bg-gray-2">
                         <RefreshCw size={17} />
+                    </button>
+                    <button
+                        type="button"
+                        disabled={loading || isArchiving}
+                        onClick={() => void archiveEligibleBranch()}
+                        className="inline-flex items-center gap-2 border border-danger px-4 py-2.5 font-medium text-danger hover:bg-danger hover:text-white disabled:cursor-wait disabled:opacity-60"
+                    >
+                        <Archive size={17} aria-hidden="true" />
+                        {isArchiving ? "Archivando..." : "Archivar subárbol"}
                     </button>
                     <button
                         type="button"
@@ -224,7 +308,7 @@ const EventTrees = () => {
                         Registro de rotaciones
                     </h2>
                     <span className="text-sm text-gray-500">
-                        {rotationHistory.reduce((total, entry) => total + entry.result.elementary_rotations, 0)} giros
+                        {rotationHistory.reduce((total, entry) => total + entry.elementaryRotations, 0)} giros
                     </span>
                 </header>
                 <div role="log" aria-label="Rotaciones realizadas durante la recuperación" aria-live="polite" className="max-h-96 space-y-4 overflow-y-auto bg-gray-2 p-4">
@@ -234,17 +318,17 @@ const EventTrees = () => {
                         <article key={`${entry.recordedAt.getTime()}-${recoveryIndex}`} className="space-y-3">
                             <div className="ml-auto max-w-lg rounded-md bg-white p-3 shadow-sm">
                                 <p className="text-xs font-medium uppercase text-meta-5">
-                                    Recuperación {recoveryIndex + 1} · {entry.recordedAt.toLocaleTimeString()}
+                                    {entry.title} · {entry.recordedAt.toLocaleTimeString()}
                                 </p>
                                 <p className="mt-1 text-sm text-black">
-                                    {entry.result.cases} casos · {entry.result.elementary_rotations} rotaciones elementales · modo {entry.result.mode}
+                                    {entry.cases} casos · {entry.elementaryRotations} rotaciones elementales{entry.mode ? ` · modo ${entry.mode}` : ""}
                                 </p>
                             </div>
-                            {entry.result.rotations.length === 0 ? (
+                            {entry.rotations.length === 0 ? (
                                 <div className="max-w-lg rounded-md border border-stroke bg-white p-3 text-sm text-gray-600">
-                                    El árbol ya estaba balanceado; no se necesitaron giros.
+                                    La operación no necesitó aplicar giros al AVL.
                                 </div>
-                            ) : entry.result.rotations.map((rotation, rotationIndex) => (
+                            ) : entry.rotations.map((rotation, rotationIndex) => (
                                 <div key={`${recoveryIndex}-${rotationIndex}`} className="max-w-lg rounded-md border border-stroke bg-white p-3 shadow-sm">
                                     <p className="font-medium text-black">
                                         Caso {rotation.case} · Evento SIS-{rotation.event_id}

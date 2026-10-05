@@ -21,6 +21,7 @@ interface CartesianPlaneProps {
   selectedStation?: Station | null;
   events?: EventMapPoint[];
   highlightedEventId?: number | null;
+  associatedEventIds?: number[];
   highlightedStationIds?: string[];
 }
 
@@ -31,6 +32,7 @@ function CartesianPlane({
   selectedStation = null,
   events = [],
   highlightedEventId = null,
+  associatedEventIds = [],
   highlightedStationIds = [],
 }: CartesianPlaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -219,6 +221,7 @@ function CartesianPlane({
             const x = mapCoordinate(mapEvent.x);
             const y = originY - (mapEvent.y / (GRID_SIZE * GRID_STEP_KM)) * (GRID_SIZE * CELL_SIZE);
             const highlighted = highlightedEventId === mapEvent.event_id;
+            const associated = associatedEventIds.includes(mapEvent.event_id);
 
             return (
               <Group
@@ -235,10 +238,10 @@ function CartesianPlane({
                 <Circle
                   x={x}
                   y={y}
-                  radius={highlighted ? 12 : 8}
-                  fill={highlighted ? "#f59e0b" : "#ef4444"}
-                  stroke={highlighted ? "#92400e" : "#991b1b"}
-                  strokeWidth={highlighted ? 3 : 2}
+                  radius={highlighted ? 12 : associated ? 10 : 8}
+                  fill={highlighted ? "#f59e0b" : associated ? "#168c83" : "#ef4444"}
+                  stroke={highlighted ? "#92400e" : associated ? "#075e57" : "#991b1b"}
+                  strokeWidth={highlighted || associated ? 3 : 2}
                 />
                 {hoveredMarker === markerKey && (
                   <Label x={x + 10} y={y - 28}>
