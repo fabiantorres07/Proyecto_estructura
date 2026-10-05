@@ -15,7 +15,7 @@ from app.structures.queue import Queue
 from app.domain.action import (
     CreationAction, CorrectionAction, AttentionChangeAction, DeletionAction,
     ParameterChangeAction, ClockAdvanceAction, QueueStepAction, MassArchiveAction,
-    GlobalRecoveryAction, LoadAction, ReactivationAction,
+    GlobalRecoveryAction, LoadAction, ReactivationAction
 )
 from app.structures.avl_tree import AVLTree, ROTATION_METRIC_KEYS, AVLTopologySnapshot
 from app.structures.avl_node import AVLNode
@@ -1547,12 +1547,60 @@ class Scenario:
 
 
 
+    def undo(self) -> dict:
+        """Undo the last action pushed on the undo stack (section 13).
 
+        Pops the top action and dispatches to the right helper using
+        isinstance. Each action type has its own private helper that
+        knows how to revert it.
 
+        If the stack is empty, raises ValueError (the router translates
+        it to 409).
 
+        If the action is a type that undo() does not know how to handle,
+        it is pushed back (so it is not lost) and NotImplementedError is
+        raised.
 
+        Returns a dict with info about what was undone, so the frontend
+        can show it. For example:
+            {"undone": "creation", "event_id": 7}
+            {"undone": "parameter_change", "parameter": "W"}
+            {"undone": "clock_advance"}
+        """
+        if self.undo_stack.is_empty():
+            raise ValueError("No hay acciones para deshacer")
 
- 
+        action = self.undo_stack.pop()
+
+        if isinstance(action, CreationAction):
+            return self._undo_creation(action)
+        elif isinstance(action, CorrectionAction):
+            return self._undo_correction(action)
+        elif isinstance(action, ReactivationAction):
+            return self._undo_reactivation(action)
+        elif isinstance(action, DeletionAction):
+            return self._undo_deletion(action)
+        elif isinstance(action, AttentionChangeAction):
+            return self._undo_attention_change(action)
+        elif isinstance(action, ParameterChangeAction):
+            return self._undo_parameter_change(action)
+        elif isinstance(action, ClockAdvanceAction):
+            return self._undo_clock_advance(action)
+        elif isinstance(action, QueueStepAction):
+            return self._undo_queue_step(action)
+        elif isinstance(action, MassArchiveAction):
+            return self._undo_mass_archive(action)
+        elif isinstance(action, GlobalRecoveryAction):
+            return self._undo_global_recovery(action)
+        elif isinstance(action, LoadAction):
+            return self._undo_load(action)
+        else:
+            # Unknown action: push it back so it is not lost.
+            self.undo_stack.push(action)
+            raise NotImplementedError(
+                f"undo() no sabe deshacer {type(action).__name__}"
+            )
+
 
     def _undo_creation(self, action: CreationAction) -> dict:
         """Deshace una creación: saca el evento de las estructuras activas
