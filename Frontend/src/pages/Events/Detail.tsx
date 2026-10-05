@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import Swal from "sweetalert2";
 import EventFormValidator from "../../components/events/EventFormValidator";
@@ -13,6 +14,7 @@ const EventDetail = () => {
     const navigate = useNavigate();
     const [event, setEvent] = useState<EventApiResponse | null>(null);
     const [loading, setLoading] = useState(true);
+    const [deleting, setDeleting] = useState(false);
 
     useEffect(() => {
         let active = true;
@@ -50,18 +52,64 @@ const EventDetail = () => {
         }
     };
 
+    const deleteEvent = async () => {
+        if (!event) return;
+        const confirmation = await Swal.fire({
+            title: "Eliminar evento",
+            text: `SIS-${event.event_id} se marcará como eliminado y no podrá reactivarse mediante reportes.`,
+            icon: "warning",
+            showCancelButton: true,
+            confirmButtonText: "Eliminar",
+            cancelButtonText: "Cancelar",
+            confirmButtonColor: "#dc2626",
+        });
+        if (!confirmation.isConfirmed) return;
+
+        setDeleting(true);
+        try {
+            await eventService.deleteEvent(event.event_id);
+            await Swal.fire({
+                title: "Evento eliminado",
+                text: `SIS-${event.event_id} ya no está activo.`,
+                icon: "success",
+            });
+            navigate("/eventos/consultas");
+        } catch (error) {
+            await Swal.fire({
+                title: "No se pudo eliminar el evento",
+                text: getApiErrorMessage(error, "Verifica que el evento siga activo"),
+                icon: "error",
+            });
+        } finally {
+            setDeleting(false);
+        }
+    };
+
     return (
         <main className="mx-auto max-w-screen-xl space-y-5 p-4 md:p-6 2xl:p-8">
             <Breadcrumb pageName="Detalle del evento" />
             {loading ? (
                 <p className="py-12 text-center text-gray-500">Cargando evento...</p>
             ) : event ? (
-                <EventFormValidator
-                    mode={3}
-                    event={event}
-                    stations={[]}
-                    handleAction={markReviewed}
-                />
+                <>
+                    <div className="flex justify-end">
+                        <button
+                            type="button"
+                            disabled={deleting}
+                            onClick={() => void deleteEvent()}
+                            className="inline-flex items-center gap-2 border border-danger px-4 py-2 font-medium text-danger hover:bg-danger hover:text-white disabled:cursor-wait disabled:opacity-60"
+                        >
+                            <Trash2 size={16} aria-hidden="true" />
+                            {deleting ? "Eliminando..." : "Eliminar evento"}
+                        </button>
+                    </div>
+                    <EventFormValidator
+                        mode={3}
+                        event={event}
+                        stations={[]}
+                        handleAction={markReviewed}
+                    />
+                </>
             ) : null}
         </main>
     );

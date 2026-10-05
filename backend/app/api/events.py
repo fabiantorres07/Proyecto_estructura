@@ -269,6 +269,17 @@ def get_event(
     return _event_response(result["event"])
 
 
+@router.delete("/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_event(
+    event_id: int,
+    scenario: Scenario = Depends(get_scenario),
+):
+    try:
+        scenario.delete_event(event_id)
+    except (KeyError, ValueError) as error:
+        _raise_http(error)
+
+
 @router.patch("/{event_id}/status", response_model=EventResponse)
 def update_event_status(
     event_id: int,

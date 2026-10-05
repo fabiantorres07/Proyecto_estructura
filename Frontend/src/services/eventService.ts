@@ -38,6 +38,10 @@ class EventService {
         return response.data;
     }
 
+    async deleteEvent(eventId: number): Promise<void> {
+        await axios.delete(`${API_URL}/${eventId}`);
+    }
+
     async getDirectory(): Promise<EventDirectoryRow[]> {
         const response = await axios.get<EventDirectoryRow[]>(`${API_URL}/directory`);
         return response.data;
