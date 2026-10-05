@@ -27,23 +27,39 @@ def _build_report(
     scenario: Scenario,
     preceding_reports: list[Report] | None = None,
 ) -> Report:
-    """Convierte el schema en el objeto de dominio. La estación se busca en
-    el escenario porque Report guarda el objeto Station, no solo su id.
-    Lanza KeyError si la estación no existe."""
+    """Turn the schema into the domain object.
+
+    If the payload brings `revision_num`, it is used as is (it is what the
+    emitting station claims). Always recomputing it with
+    next_report_revision() would produce "current + 1" and force every
+    report into the correction case, breaking the confirmation, conflict,
+    and old cases of the section 6 table.
+
+    If the payload does NOT bring it, next_report_revision() is used only
+    as a suggestion. `preceding_reports` are the reports of the same burst
+    that are not queued yet, so two reports of the same event in one burst
+    get consecutive suggestions.
+
+    The station is looked up in the scenario because Report stores the
+    Station object, not just its id. Raises KeyError if it does not exist.
+    """
     return Report(
         event_id=data.event_id,
-        revision_num=scenario.next_report_revision(
-        data.event_id,
-            preceding_reports,
+        revision_num=(
+            data.revision_num
+            if data.revision_num is not None
+            else scenario.next_report_revision(data.event_id, preceding_reports)
         ),
         station=scenario.get_station(data.station_id),
         magnitude=data.magnitude,
         depth=data.depth,
         x=data.x,
         y=data.y,
-        occurred_at=data.occurred_at,
+        # No date in the payload -> the current simulation clock.
+        occurred_at=(
+            data.occurred_at if data.occurred_at is not None else scenario.simulation_clock
+        ),
     )
-
 
 def _to_response(report: Report, position: int) -> dict:
     """Report -> datos de ReportResponse. Se arma a mano porque el
@@ -199,11 +215,13 @@ def update_next_report(
 def process_next_report(scenario: Scenario = Depends(get_scenario)):
     try:
         result = scenario.process_next_report()
-        report = result["report"]
         return {
             "case": result["case"],
             "event_id": result["event_id"],
-            "revision_num": report.revision_num,
+            "revision_num": result["revision_num"],
+            "station_id": result["station_id"],
+            "rotations": result["rotations"],
+            "rotation_delta": result["rotation_delta"],
         }
     except ValueError as error:
         _raise_http(error)

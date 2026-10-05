@@ -67,9 +67,15 @@ class CreationAction:
     otro evento cuya referencia haya cambiado por culpa de esta creación.
     """
 
-    def __init__(self, event_id: int, old_references: dict[int, int | None]):
+    def __init__(self, event_id: int, old_references: dict[int, int | None],
+                 tree_checkpoint: Optional[dict] = None):
         self.event_id = event_id
         self.old_references = old_references
+        # Foto de la forma del AVL y del BST tomada ANTES de tocar los
+        # árboles, más lo que la operación sumó a las métricas de rotación
+        # (ver Scenario._tree_checkpoint). Al deshacer se restaura tal cual:
+        # misma topología y mismas métricas (sección 13).
+        self.tree_checkpoint = tree_checkpoint
 
 class CorrectionAction:
     """Acción que representa una corrección manual de un evento activo.
@@ -156,6 +162,8 @@ class CorrectionAction:
         old_revision: int,
         old_attention_status,
         old_references: dict[int, int | None],
+        counter_delta: Optional[dict[str, int]] = None,
+        tree_checkpoint: Optional[dict] = None,
     ):
         self.event_id = event_id
         self.old_magnitude = old_magnitude
@@ -167,6 +175,14 @@ class CorrectionAction:
         self.old_revision = old_revision
         self.old_attention_status = old_attention_status
         self.old_references = old_references
+        # Lo que esta corrección sumó a los contadores de la sección 14
+        # ({"corrections_accepted": 1}). Se resta al deshacer.
+        self.counter_delta = counter_delta or {}
+        # Foto de la forma del AVL y del BST tomada ANTES de tocar los
+        # árboles, más lo que la operación sumó a las métricas de rotación
+        # (ver Scenario._tree_checkpoint). Al deshacer se restaura tal cual:
+        # misma topología y mismas métricas (sección 13).
+        self.tree_checkpoint = tree_checkpoint
 
 
 class ReactivationAction:
@@ -202,6 +218,8 @@ class ReactivationAction:
         old_revision: int,
         old_attention_status,
         old_references: dict[int, int | None],
+        counter_delta: Optional[dict[str, int]] = None,
+        tree_checkpoint: Optional[dict] = None,
     ):
         self.event_id = event_id
         self.old_magnitude = old_magnitude
@@ -213,6 +231,14 @@ class ReactivationAction:
         self.old_revision = old_revision
         self.old_attention_status = old_attention_status
         self.old_references = old_references
+        # Lo que esta reactivación sumó a los contadores de la sección 14
+        # ({"corrections_accepted": 1}). Se resta al deshacer.
+        self.counter_delta = counter_delta or {}
+        # Foto de la forma del AVL y del BST tomada ANTES de tocar los
+        # árboles, más lo que la operación sumó a las métricas de rotación
+        # (ver Scenario._tree_checkpoint). Al deshacer se restaura tal cual:
+        # misma topología y mismas métricas (sección 13).
+        self.tree_checkpoint = tree_checkpoint
 
 
 class DeletionAction:
@@ -221,9 +247,15 @@ class DeletionAction:
     También guarda las referencias viejas de los eventos afectados por la
     eliminación (los que tenían al eliminado como referencia), para poder
     restaurarlas al deshacer."""
-    def __init__(self, event: Event, old_references: dict[int, int | None]):
+    def __init__(self, event: Event, old_references: dict[int, int | None],
+                 tree_checkpoint: Optional[dict] = None):
         self.event = event
         self.old_references = old_references
+        # Foto de la forma del AVL y del BST tomada ANTES de tocar los
+        # árboles, más lo que la operación sumó a las métricas de rotación
+        # (ver Scenario._tree_checkpoint). Al deshacer se restaura tal cual:
+        # misma topología y mismas métricas (sección 13).
+        self.tree_checkpoint = tree_checkpoint
 
 class MassArchiveAction:
     """Guarda la raíz del subárbol que se archivó en bloque, su antiguo
@@ -232,15 +264,26 @@ class MassArchiveAction:
 
     rotation_delta: lo que sumó detach_subtree a las métricas de rotación.
     Se resta al deshacer con avl_tree.revert_rotation_metrics(delta).
+
+    counter_delta: lo que sumó el archivo a los contadores de la sección 14
+    ({"mass_archives": 1, "archived_events": tamaño de la rama}). Se resta
+    al deshacer con Scenario._revert_counters(delta).
     """
     def __init__(self, archived_root: AVLNode, former_parent: Optional[AVLNode],
                  was_left_child: Optional[bool], event_ids: list[int],
-                 rotation_delta: dict = None):
+                 rotation_delta: dict = None, counter_delta: dict = None,
+                 tree_checkpoint: Optional[dict] = None):
         self.archived_root = archived_root
         self.former_parent = former_parent
         self.was_left_child = was_left_child
         self.event_ids = event_ids
         self.rotation_delta = rotation_delta or {}
+        self.counter_delta = counter_delta or {}
+        # Foto de la forma del AVL y del BST tomada ANTES de tocar los
+        # árboles, más lo que la operación sumó a las métricas de rotación
+        # (ver Scenario._tree_checkpoint). Al deshacer se restaura tal cual:
+        # misma topología y mismas métricas (sección 13).
+        self.tree_checkpoint = tree_checkpoint
         
 class ParameterChangeAction:
     """Guarda el nombre del parámetro global (L, W, R o T), su valor
@@ -262,10 +305,16 @@ class ParameterChangeAction:
     """
 
     def __init__(self, parameter_name: str, old_value: float,
-                 old_references: dict[int, int | None] = None):
+                 old_references: dict[int, int | None] = None,
+                 old_values: Optional[dict[str, float]] = None):
         self.parameter_name = parameter_name
         self.old_value = old_value
         self.old_references = old_references
+        # Todos los parámetros que cambió UNA llamada a change_parameters,
+        # con su valor viejo ({"W": 48.0, "R": 40.0}). Un cambio de varios
+        # parámetros a la vez es UNA sola acción: se deshace con un solo
+        # "deshacer". parameter_name queda con los nombres unidos ("W,R").
+        self.old_values = old_values or {parameter_name: old_value}
 
 class ClockAdvanceAction:
     """Guarda el valor anterior del reloj de simulación antes de avanzarlo, para poder retrocederlo al deshacer."""
@@ -322,8 +371,13 @@ class QueueStepAction:
         queue_position: int,
         inner_action: Optional[CreationAction | CorrectionAction | ReactivationAction] = None,
         confirmed_station_id: Optional[int] = None,
+        counter_delta: Optional[dict[str, int]] = None,
     ):
         self.report = report
         self.queue_position = queue_position
         self.inner_action = inner_action
         self.confirmed_station_id = confirmed_station_id
+        # Lo que sumó el PROPIO paso a los contadores de la sección 14
+        # (conflicto o reporte descartado). Una corrección o reactivación
+        # interna guarda su conteo en inner_action, no aquí.
+        self.counter_delta = counter_delta or {}

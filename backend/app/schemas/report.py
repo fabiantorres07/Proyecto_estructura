@@ -14,26 +14,49 @@ def _check_one_decimal(value: float) -> float:
 
 
 class ReportCreate(BaseModel):
-    """Datos que envía el usuario al preparar un reporte de una estación.
+    """Data sent by the user when preparing a report from a station.
 
-    Aquí se validan los rangos y formatos que NO dependen del estado del
-    escenario (política acordada: los rangos van en los schemas). Lo que sí
-    depende del estado —que la estación exista y que la fecha no sea
-    posterior al reloj de simulación— lo valida Scenario.enqueue_report.
+    Range and format validations that DO NOT depend on the scenario state
+    happen here (agreed policy: ranges go in the schemas). What DOES
+    depend on the state —that the station exists and that the date is not
+    later than the simulation clock— is validated by
+    Scenario.enqueue_report.
 
-    No se valida aquí si el id está activo, archivado o eliminado: eso se
-    decide al PROCESAR el reporte, porque entre encolar y procesar el estado
-    del id puede cambiar (por ejemplo, al deshacer una eliminación)."""
+    The check of whether the id is active, archived, or eliminated is NOT
+    done here: it is decided when PROCESSING the report, because between
+    enqueue and process the state of the id can change (for example, when
+    undoing a deletion).
+
+    The `revision_num` is the revision CLAIMED BY THE EMITTING STATION,
+    not a value the backend computes. That is what makes confirmation,
+    conflict, and old reports possible (section 6 table):
+      - revision > current                     -> correction
+      - revision == current, same data         -> confirmation
+      - revision == current, different data    -> conflict
+      - revision < current                     -> old
+    If the backend always computed "current + 1", every report would land
+    as a correction and the other cases would never trigger.
+
+    It is OPTIONAL: if the client does not send it, the router fills it
+    with Scenario.next_report_revision() as a suggestion (the next
+    revision after the queued reports or the current event). If the
+    client sends it, it is respected as is. This keeps forms that do not
+    have a revision field working, without forcing every report into the
+    correction case when the field IS sent.
+    """
 
     event_id: int = Field(ge=1, le=999999)
+    revision_num: int | None = Field(default=None, ge=1)
     station_id: str = Field(min_length=1)
     magnitude: float = Field(ge=-2.0, le=10.0, allow_inf_nan=False)
     depth: float = Field(ge=0.0, le=700.0, allow_inf_nan=False)
     x: float = Field(ge=0.0, le=1000.0, allow_inf_nan=False)
     y: float = Field(ge=0.0, le=1000.0, allow_inf_nan=False)
-    occurred_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc).replace(microsecond=0)
-    )
+    # Optional. If it is not sent, the router uses the current SIMULATION
+    # clock (not the computer's clock): the simulation clock only moves by
+    # user action, so "now" in real time would usually be later than it and
+    # the report would be rejected.
+    occurred_at: datetime | None = None
 
     @field_validator("magnitude", "depth", "x", "y")
     @classmethod
@@ -43,15 +66,16 @@ class ReportCreate(BaseModel):
     @field_validator("occurred_at")
     @classmethod
     def utc_with_seconds_precision(cls, value: datetime) -> datetime:
-        """Exige zona horaria, exige precisión de segundos y normaliza a UTC.
-        Guardar siempre en UTC hace que la comparación de "iguales datos"
-        (sección 6) no dependa del formato con que llegó la fecha."""
+        """Requires timezone, requires second precision, normalizes to UTC.
+        Storing always in UTC makes the "same data" comparison (section 6)
+        independent of the input format."""
+        if value is None:
+            return None
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("occurred_at must include a timezone")
         if value.microsecond != 0:
             raise ValueError("occurred_at must have a precision of seconds")
         return value.astimezone(timezone.utc)
-
 
 class ReportBatchCreate(BaseModel):
     """Ráfaga de reportes de N estaciones (N >= 1, sección 8). Se encolan
@@ -101,7 +125,24 @@ class ReportReviewResponse(BaseModel):
     current_event: ReportReviewEvent | None
     
     
+class ReportStepRotation(BaseModel):
+    """One AVL rebalancing case caused by a queue step."""
+
+    case: str               # LL, RR, LR or RL
+    event_id: int           # node that was unbalanced
+    balance_factor: int     # its factor before rotating
+    rotations: list[str]    # elementary rotations, in order ("left"/"right")
+
+
 class ReportProcessedResponse(BaseModel):
+    """Result of one queue step (section 8): station, event, revision,
+    decision and the rotations it caused. rotation_delta is how much the
+    step added to each rotation metric (a double case counts 1 case and 2
+    elementary rotations). Empty when the step did not touch the trees."""
+
     case: str
     event_id: int
     revision_num: int
+    station_id: str
+    rotations: list[ReportStepRotation] = []
+    rotation_delta: dict[str, int] = {}

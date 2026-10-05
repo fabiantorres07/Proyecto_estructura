@@ -10,6 +10,7 @@ from app.domain.report import Report
 from app.domain.scenario import Scenario
 from app.schemas.event import (
     EventCreate,
+    EventCorrection,
     BranchArchivePreviewResponse,
     BranchArchiveResponse,
     EventAssociationsResponse,
@@ -106,13 +107,18 @@ def create_event(
         station = scenario.get_station(data.station_id)
         report = Report(
             event_id=data.event_id,
-            revision_num=scenario.next_report_revision(data.event_id),
+            # Manual creation starts at revision 1 (section 6) unless the
+            # form sends a revision explicitly.
+            revision_num=data.revision_num if data.revision_num is not None else 1,
             station=station,
             magnitude=data.magnitude,
             depth=data.depth,
             x=data.x,
             y=data.y,
-            occurred_at=data.occurred_at,
+            # No date in the payload -> the current simulation clock.
+            occurred_at=(
+                data.occurred_at if data.occurred_at is not None else scenario.simulation_clock
+            ),
         )
         scenario._validate_report(report)
         event = scenario.create_event(
@@ -282,12 +288,29 @@ def get_event(
     except KeyError as error:
         _raise_http(error)
 
-    if result["status"] != "active":
+    # Active and archived events keep their data (section 6), so both are
+    # returned, with their status. An eliminated id only keeps the id.
+    if result["status"] == "eliminated":
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Event {event_id} is not active",
+            detail=f"Event {event_id} was eliminated",
         )
-    return _event_response(result["event"])
+    return {**_event_response(result["event"]), "status": result["status"]}
+
+
+@router.patch("/{event_id}", response_model=EventResponse)
+def correct_event(
+    event_id: int,
+    data: EventCorrection,
+    scenario: Scenario = Depends(get_scenario),
+):
+    """Corrección manual de un evento activo (sección 6: "r + 1"). Solo se
+    cambian los campos enviados. Se puede deshacer con POST /undo."""
+    try:
+        event = scenario.correct_event(event_id, data.model_dump(exclude_unset=True))
+        return _event_response(event)
+    except (KeyError, ValueError) as error:
+        _raise_http(error)
 
 
 @router.delete("/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
