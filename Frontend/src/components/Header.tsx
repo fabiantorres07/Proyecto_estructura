@@ -10,11 +10,20 @@ import {
 } from '../services/modeService';
 import { undoService } from '../services/undoService';
 import { scenarioService } from '../services/scenarioService';
+import { ScenarioLoadSummary } from '../models/Scenario/ScenarioLoadSummary';
 
 const toLocalDateTime = (date: Date) =>
   new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
     .toISOString()
     .slice(0, 19);
+
+const escapeHtml = (value: string) => value.replace(/[&<>"']/g, (character) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+}[character] ?? character));
 
 const Header = (props: {
   sidebarOpen: string | boolean | undefined;
@@ -278,11 +287,34 @@ const Header = (props: {
       setStressMode(stress);
       setIsAvlBalanced(audit.is_valid && audit.is_avl);
 
-      const warnings = result.warnings.length ? ` Avisos: ${result.warnings.join('; ')}.` : '';
+      const treeRow = (name: string, summary: ScenarioLoadSummary['avl']) => `
+        <tr>
+          <th style="padding:8px;text-align:left">${name}</th>
+          <td style="padding:8px">${summary.root_id ?? 'Vacío'}</td>
+          <td style="padding:8px">${summary.height}</td>
+          <td style="padding:8px">${summary.max_depth ?? '-'}</td>
+          <td style="padding:8px">${summary.leaves}</td>
+        </tr>`;
+      const warnings = result.warnings.length
+        ? `<p style="margin-top:12px;text-align:left">Avisos: ${escapeHtml(result.warnings.join('; '))}</p>`
+        : '';
+      const inherited = result.inherited.length
+        ? result.inherited.map(escapeHtml).join(', ')
+        : 'Ninguno';
       await Swal.fire({
         title: 'Versión cargada',
-        text: `${selectedMode === 'insertions' ? 'Por inserciones. ' : 'Por topología. '}${result.active_events} eventos activos, ${result.archived_events} archivados y ${result.queued_reports} reportes en cola.${warnings}`,
+        html: `<div style="text-align:left">
+          <p>${selectedMode === 'insertions' ? 'Por inserciones' : 'Por topología'} · ${result.mode}</p>
+          <p>${result.active_events} activos · ${result.archived_events} archivados · ${result.queued_reports} reportes en cola</p>
+          <table style="width:100%;margin-top:12px;border-collapse:collapse;text-align:center">
+            <thead><tr><th style="padding:8px;text-align:left">Árbol</th><th style="padding:8px">Raíz</th><th style="padding:8px">Altura</th><th style="padding:8px">Prof. máxima</th><th style="padding:8px">Hojas</th></tr></thead>
+            <tbody>${treeRow('AVL', result.avl)}${treeRow('BST', result.bst)}</tbody>
+          </table>
+          <p style="margin-top:12px"><strong>Valores heredados:</strong> ${inherited}</p>
+          ${warnings}
+        </div>`,
         icon: 'success',
+        width: 720,
       });
       window.location.reload();
     } catch (error) {

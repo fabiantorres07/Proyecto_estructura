@@ -1,5 +1,6 @@
 import axios from "axios";
 import { GlobalParameters } from "../models/Parameters/GlobalParameters";
+import { notifyScenarioStateChanged } from "./undoService";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/parameters`;
 
@@ -11,6 +12,7 @@ class ParametersService {
 
     async updateParameters(parameters: GlobalParameters): Promise<GlobalParameters> {
         const response = await axios.patch<GlobalParameters>(API_URL, parameters);
+        notifyScenarioStateChanged();
         return response.data;
     }
 }

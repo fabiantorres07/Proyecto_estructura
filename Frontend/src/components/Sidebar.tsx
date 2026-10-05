@@ -309,6 +309,38 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
               </li>
               <li>
                 <NavLink
+                  to="/indicadores"
+                  className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
+                    pathname.includes('/indicadores') &&
+                    'bg-graydark dark:bg-meta-4'
+                  }`}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M3 3v18h18" />
+                    <path d="m19 9-5 5-4-4-5 5" />
+                  </svg>
+                  Indicadores
+                </NavLink>
+              </li>
+              <li>
+                <NavLink
+                  to="/versiones"
+                  className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
+                    pathname.includes('/versiones') &&
+                    'bg-graydark dark:bg-meta-4'
+                  }`}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M21 8v13H3V3h13" />
+                    <path d="M7 3v5h8V3" />
+                    <path d="M7 21v-8h10v8" />
+                    <path d="m16 5 2 2 4-4" />
+                  </svg>
+                  Versiones
+                </NavLink>
+              </li>
+              <li>
+                <NavLink
                   to="/configuracion/parametros"
                   className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
                     pathname.includes('/configuracion') &&

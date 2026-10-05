@@ -2,6 +2,7 @@ import axios from "axios";
 import { BalanceRecovery } from "../models/Mode/BalanceRecovery";
 import { Mode } from "../models/Mode/Mode";
 import { StructureAudit } from "../models/Mode/StructureAudit";
+import { notifyScenarioStateChanged } from "./undoService";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/mode`;
 
@@ -36,6 +37,7 @@ class ModeService {
         }
         try {
             await axios.put<Mode>(API_URL, newMode);
+            notifyScenarioStateChanged();
         } catch (error) {
             console.error("Error al actualizar el modo:", error);
             throw error;
@@ -58,6 +60,7 @@ class ModeService {
                 },
             }));
         }
+        notifyScenarioStateChanged();
         return result;
     }
 }

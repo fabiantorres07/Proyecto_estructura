@@ -41,6 +41,7 @@ const CreateReport = () => {
         try {
             const commonReport = {
                 event_id: report.event_id,
+                ...(report.revision_num != null ? { revision_num: report.revision_num } : {}),
                 magnitude: report.magnitude,
                 depth: report.depth,
                 x: report.x,

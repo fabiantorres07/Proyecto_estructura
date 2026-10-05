@@ -25,6 +25,8 @@ const EventTrees = lazy(() => import('../pages/Events/Trees'));
 const EventDetail = lazy(() => import('../pages/Events/Detail'));
 const EventQueries = lazy(() => import('../pages/Events/Queries'));
 const ParameterSettings = lazy(() => import('../pages/Parameters/ParameterSettings'));
+const IndicatorsDashboard = lazy(() => import('../pages/Indicators/IndicatorsDashboard'));
+const VersionsDashboard = lazy(() => import('../pages/Versions/VersionsDashboard'));
 
 const coreRoutes = [
   {
@@ -152,6 +154,16 @@ const coreRoutes = [
     path: '/configuracion/parametros',
     title: 'Parámetros globales',
     component: ParameterSettings,
+  },
+  {
+    path: '/indicadores',
+    title: 'Panel de indicadores',
+    component: IndicatorsDashboard,
+  },
+  {
+    path: '/versiones',
+    title: 'Versiones guardadas',
+    component: VersionsDashboard,
   }
   
 ];

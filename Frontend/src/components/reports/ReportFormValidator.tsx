@@ -36,6 +36,7 @@ const ReportFormValidator: React.FC<MyFormProps> = ({
                 report
                     ? {
                         event_id: report.event_id || "",
+                        revision_num: report.revision_num ?? "",
                         station_id: report.station_id || "",
                         magnitude: report.magnitude || "",
                         depth: report.depth || "",
@@ -45,6 +46,7 @@ const ReportFormValidator: React.FC<MyFormProps> = ({
                     }
                     : {
                         event_id: "",
+                        revision_num: "",
                         station_id: "",
                         magnitude: "",
                         depth: "",
@@ -59,6 +61,11 @@ const ReportFormValidator: React.FC<MyFormProps> = ({
                     .integer("El número del id debe ser un entero")
                     .min(1, "El id del evento debe estar entre 1 y 999999")
                     .max(999999, "El id del evento debe estar entre 1 y 999999"),
+                revision_num: Yup.number()
+                    .transform((value, originalValue) => String(originalValue).trim() === "" ? undefined : value)
+                    .integer("La revisión debe ser un entero")
+                    .min(1, "La revisión debe ser mayor que cero")
+                    .notRequired(),
                 station_id: batchMode
                     ? Yup.string().notRequired()
                     : Yup.string().required("La estación de donde proviene el informe es obligatoria"),
@@ -118,9 +125,11 @@ const ReportFormValidator: React.FC<MyFormProps> = ({
                     occurredAt = parsedDate;
                 }
 
-                const { ocurred_at: _dateValue, ...reportValues } = values;
+                const { ocurred_at: _dateValue, revision_num: revisionValue, ...reportValues } = values;
+                const revisionNumber = String(revisionValue ?? "").trim();
                 await handleAction({
                     ...reportValues,
+                    ...(revisionNumber ? { revision_num: Number(revisionNumber) } : {}),
                     ...(occurredAt ? { ocurred_at: occurredAt } : {}),
                 } as ReportFormValues);
             }}
@@ -158,6 +167,25 @@ const ReportFormValidator: React.FC<MyFormProps> = ({
                         className="text-danger text-sm"
                     />
                 </div>
+
+                {mode === 1 && (
+                    <div>
+                        <label htmlFor="revision_num" className="block text-lg font-medium text-gray-700">
+                            Revisión indicada (opcional)
+                        </label>
+                        <Field
+                            type="number"
+                            inputMode="numeric"
+                            min="1"
+                            step="1"
+                            name="revision_num"
+                            className="w-full border border-gray-300 rounded-md p-2"
+                            placeholder="Automática"
+                        />
+                        <p className="mt-1 text-sm text-gray-500">Vacía, se calcula automáticamente. Si se indica, el backend la compara para detectar conflictos.</p>
+                        <ErrorMessage name="revision_num" component="p" className="text-danger text-sm" />
+                    </div>
+                )}
 
                 {batchMode ? (
                     <fieldset className="space-y-3">

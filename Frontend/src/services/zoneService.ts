@@ -1,5 +1,6 @@
 import axios from "axios";
 import { Zone } from "../models/Zone";
+import { notifyScenarioStateChanged } from "./undoService";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/zones`;
 
@@ -38,6 +39,7 @@ class ZoneService {
                 ...zone,
                 name: zone.name ? toApiName(zone.name) : zone.name,
             });
+            notifyScenarioStateChanged();
             return fromApiZone(response.data);
         } catch (error) {
             console.error("Error al crear zona:", error);
@@ -51,6 +53,7 @@ class ZoneService {
                 ...zone,
                 ...(zone.name ? { name: toApiName(zone.name) } : {}),
             });
+            notifyScenarioStateChanged();
             return fromApiZone(response.data);
         } catch (error) {
             console.error("Error al actualizar zona:", error);
@@ -61,6 +64,7 @@ class ZoneService {
     async deleteZone(zone_name: string): Promise<boolean> {
         try {
             await axios.delete(`${API_URL}/${toApiPath(zone_name)}`);
+            notifyScenarioStateChanged();
             return true;
         } catch (error) {
             console.error("Error al eliminar zona:", error);

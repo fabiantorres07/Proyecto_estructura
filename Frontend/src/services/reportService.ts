@@ -3,7 +3,7 @@ import { Report } from "../models/Report/Report";
 import { ReportFormValues } from "../models/Report/ReportFormValues";
 import { ReportReviewResponse } from "../models/Report/ReportReviewResponse";
 import { ReportProcessedResponse } from "../models/Report/ReportProcessedResponse";
-import { SCENARIO_STATE_CHANGED_EVENT } from "./undoService";
+import { notifyScenarioStateChanged } from "./undoService";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/reports`;
 
@@ -25,9 +25,7 @@ class ReportService {
 
     async clearQueue(): Promise<number> {
         const response = await axios.delete<{ removed: number }>(API_URL);
-        if (typeof window !== "undefined") {
-            window.dispatchEvent(new Event(SCENARIO_STATE_CHANGED_EVENT));
-        }
+        notifyScenarioStateChanged();
         return response.data.removed;
     }
 
@@ -49,9 +47,7 @@ class ReportService {
                 ...(ocurred_at ? { occurred_at: ocurred_at.toISOString() } : {}),
             };
             const response = await axios.post<ReportFormValues>(API_URL, requestBody);
-            if (typeof window !== "undefined") {
-                window.dispatchEvent(new Event(SCENARIO_STATE_CHANGED_EVENT));
-            }
+            notifyScenarioStateChanged();
             return response.data;
         } catch (error) {
             console.error("Error al crear reporte:", error);
@@ -66,9 +62,7 @@ class ReportService {
                 ...(ocurred_at ? { occurred_at: ocurred_at.toISOString() } : {}),
             })),
         });
-        if (typeof window !== "undefined") {
-            window.dispatchEvent(new Event(SCENARIO_STATE_CHANGED_EVENT));
-        }
+        notifyScenarioStateChanged();
         return response.data;
     }
 
@@ -93,16 +87,19 @@ class ReportService {
                 ...(ocurred_at ? { occurred_at: ocurred_at.toISOString() } : {}),
             },
         );
+        notifyScenarioStateChanged();
         return this.toFormValues(response.data);
     }
 
     async processNextReport(): Promise<ReportProcessedResponse> {
         const response = await axios.post<ReportProcessedResponse>(`${API_URL}/process-next`);
+        notifyScenarioStateChanged();
         return response.data;
     }
 
     async discardNextReport(): Promise<ReportFormValues> {
         const response = await axios.delete<Omit<ReportFormValues, "ocurred_at"> & { occurred_at: string }>(`${API_URL}/next`);
+        notifyScenarioStateChanged();
         return this.toFormValues(response.data);
     }
 }

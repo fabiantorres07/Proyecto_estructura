@@ -1,5 +1,6 @@
 import axios from "axios";
 import { ClockResponse } from "../models/clock";
+import { notifyScenarioStateChanged } from "./undoService";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/clock`;
 
@@ -19,6 +20,7 @@ class ClockService {
             await axios.put<ClockResponse>(API_URL, {
                 simulation_clock: simulationClock.toISOString(),
             });
+            notifyScenarioStateChanged();
         } catch (error) {
             console.error("Error al actualizar el reloj:", error);
             throw error;

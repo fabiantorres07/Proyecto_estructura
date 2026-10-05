@@ -1,6 +1,6 @@
 import axios from "axios";
 import { ScenarioLoadSummary } from "../models/Scenario/ScenarioLoadSummary";
-import { SCENARIO_STATE_CHANGED_EVENT } from "./undoService";
+import { notifyScenarioStateChanged } from "./undoService";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/scenario`;
 
@@ -16,9 +16,7 @@ class ScenarioService {
 
     async loadScenario(data: Record<string, unknown>): Promise<ScenarioLoadSummary> {
         const response = await axios.post<ScenarioLoadSummary>(`${API_URL}/load`, data);
-        if (typeof window !== "undefined") {
-            window.dispatchEvent(new Event(SCENARIO_STATE_CHANGED_EVENT));
-        }
+        notifyScenarioStateChanged();
         return response.data;
     }
 }

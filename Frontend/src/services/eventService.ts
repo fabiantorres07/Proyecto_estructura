@@ -8,6 +8,8 @@ import { CostlyAccessEventResponse } from "../models/Event/CostlyAccessEventResp
 import { EventTreesResponse } from "../models/Event/EventTreesResponse";
 import { BranchArchivePreview } from "../models/Event/BranchArchivePreview";
 import { BranchArchiveResult } from "../models/Event/BranchArchiveResult";
+import { TreeComparisonResponse } from "../models/Event/TreeComparisonResponse";
+import { notifyScenarioStateChanged } from "./undoService";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/events`;
 
@@ -25,6 +27,11 @@ class EventService {
         return response.data;
     }
 
+    async getTreeComparison(): Promise<TreeComparisonResponse> {
+        const response = await axios.get<TreeComparisonResponse>(`${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/trees/compare`);
+        return response.data;
+    }
+
     async previewBranchArchive(): Promise<BranchArchivePreview> {
         const response = await axios.post<BranchArchivePreview>(`${API_URL}/archive/preview`);
         return response.data;
@@ -32,6 +39,7 @@ class EventService {
 
     async archiveBranch(rootId: number): Promise<BranchArchiveResult> {
         const response = await axios.post<BranchArchiveResult>(`${API_URL}/archive/${rootId}`);
+        if (response.data.archived) notifyScenarioStateChanged();
         return response.data;
     }
 
@@ -47,6 +55,7 @@ class EventService {
 
     async createEvent(event: EventCreateRequest): Promise<EventApiResponse> {
         const response = await axios.post<EventApiResponse>(API_URL, event);
+        notifyScenarioStateChanged();
         return response.data;
     }
 
@@ -55,6 +64,7 @@ class EventService {
             `${API_URL}/${eventId}/status`,
             { attention_status: "reviewed" },
         );
+        notifyScenarioStateChanged();
         return response.data;
     }
 
@@ -63,14 +73,13 @@ class EventService {
             ...correction,
             ...(correction.occurred_at ? { occurred_at: correction.occurred_at.toISOString() } : {}),
         });
-        if (typeof window !== "undefined") {
-            window.dispatchEvent(new Event("sismolab:scenario-state-changed"));
-        }
+        notifyScenarioStateChanged();
         return response.data;
     }
 
     async deleteEvent(eventId: number): Promise<void> {
         await axios.delete(`${API_URL}/${eventId}`);
+        notifyScenarioStateChanged();
     }
 
     async getDirectory(): Promise<EventDirectoryRow[]> {

@@ -6,6 +6,7 @@ import Swal from "sweetalert2";
 import { CostlyAccessEventResponse } from "../../models/Event/CostlyAccessEventResponse";
 import { EventTreeNode } from "../../models/Event/EventTreeNode";
 import { EventTreesResponse } from "../../models/Event/EventTreesResponse";
+import { TreeComparisonResponse } from "../../models/Event/TreeComparisonResponse";
 import { eventService } from "../../services/eventService";
 import { modeService } from "../../services/modeService";
 import { SCENARIO_UNDONE_EVENT } from "../../services/undoService";
@@ -157,6 +158,7 @@ const TreePanel: React.FC<TreePanelProps> = ({ title, rootNode, costlyAccessByEv
 
 const EventTrees = () => {
     const [trees, setTrees] = useState<EventTreesResponse | null>(null);
+    const [comparison, setComparison] = useState<TreeComparisonResponse | null>(null);
     const [costlyAccessByEvent, setCostlyAccessByEvent] = useState<Map<number, CostlyAccessEventResponse>>(new Map());
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
@@ -169,12 +171,20 @@ const EventTrees = () => {
         setLoading(true);
         setError(null);
         try {
-            const [treesResult, costlyAccessResult] = await Promise.allSettled([
+            const [treesResult, costlyAccessResult, comparisonResult] = await Promise.allSettled([
                 eventService.getTrees(),
                 eventService.getCostlyAccess(),
+                eventService.getTreeComparison(),
             ]);
             if (treesResult.status === "rejected") throw treesResult.reason;
             setTrees(treesResult.value);
+
+            if (comparisonResult.status === "fulfilled") {
+                setComparison(comparisonResult.value);
+            } else {
+                setComparison(null);
+                setError(getApiErrorMessage(comparisonResult.reason, "No se pudo cargar la comparación AVL/BST"));
+            }
 
             if (costlyAccessResult.status === "fulfilled") {
                 setCostlyAccessByEvent(new Map<number, CostlyAccessEventResponse>(
@@ -329,6 +339,32 @@ const EventTrees = () => {
                         <TreePanel title="AVL · balanceado" rootNode={trees.avl} costlyAccessByEvent={costlyAccessByEvent} />
                         <TreePanel title="BST · sin balanceo" rootNode={trees.bst} />
                     </div>
+                    {comparison && (
+                        <section className="border border-stroke bg-white dark:border-strokedark dark:bg-boxdark">
+                            <header className="border-b border-stroke px-5 py-4 dark:border-strokedark">
+                                <h2 className="text-lg font-semibold text-black dark:text-white">Comparación AVL vs BST</h2>
+                                <p className="mt-1 text-sm text-gray-500">Búsquedas de las mismas {comparison.n_searches} claves.</p>
+                            </header>
+                            <div className="overflow-x-auto">
+                                <table className="w-full min-w-[480px] text-left text-sm">
+                                    <thead className="bg-gray-2 text-xs uppercase text-gray-600 dark:bg-meta-4 dark:text-bodydark2">
+                                        <tr>
+                                            <th className="px-5 py-3">Métrica</th>
+                                            <th className="px-5 py-3">AVL</th>
+                                            <th className="px-5 py-3">BST</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr className="border-t border-stroke dark:border-strokedark"><th className="px-5 py-3 font-medium">Altura</th><td className="px-5 py-3">{comparison.avl.height}</td><td className="px-5 py-3">{comparison.bst.height}</td></tr>
+                                        <tr className="border-t border-stroke dark:border-strokedark"><th className="px-5 py-3 font-medium">Hojas</th><td className="px-5 py-3">{comparison.avl.leaves}</td><td className="px-5 py-3">{comparison.bst.leaves}</td></tr>
+                                        <tr className="border-t border-stroke dark:border-strokedark"><th className="px-5 py-3 font-medium">Comparaciones totales</th><td className="px-5 py-3">{comparison.avl.total_comparisons}</td><td className="px-5 py-3">{comparison.bst.total_comparisons}</td></tr>
+                                        <tr className="border-t border-stroke dark:border-strokedark"><th className="px-5 py-3 font-medium">Máximo por búsqueda</th><td className="px-5 py-3">{comparison.avl.max_single_search}</td><td className="px-5 py-3">{comparison.bst.max_single_search}</td></tr>
+                                        <tr className="border-t border-stroke dark:border-strokedark"><th className="px-5 py-3 font-medium">Promedio por búsqueda</th><td className="px-5 py-3">{comparison.avl.avg_comparisons.toFixed(2)}</td><td className="px-5 py-3">{comparison.bst.avg_comparisons.toFixed(2)}</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+                    )}
                 </>
             ) : null}
 
