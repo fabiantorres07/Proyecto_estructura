@@ -8,6 +8,7 @@ import {
   ModeStateUpdateEvent,
   modeService,
 } from '../services/modeService';
+import { undoService } from '../services/undoService';
 
 const toLocalDateTime = (date: Date) =>
   new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
@@ -25,6 +26,7 @@ const Header = (props: {
   const [isModeLoading, setIsModeLoading] = useState(true);
   const [isModeUpdating, setIsModeUpdating] = useState(false);
   const [isAvlBalanced, setIsAvlBalanced] = useState(true);
+  const [isUndoing, setIsUndoing] = useState(false);
 
   useEffect(() => {
     const loadClock = async () => {
@@ -151,6 +153,52 @@ const Header = (props: {
     }
   }
 
+  const handleUndo = async () => {
+    setIsUndoing(true);
+    try {
+      const result = await undoService.undo();
+      const [clock, stress, audit] = await Promise.all([
+        clockService.getClock(),
+        modeService.getMode(),
+        modeService.getStructureAudit(),
+      ]);
+      setDateTime(toLocalDateTime(clock));
+      setStressMode(stress);
+      setIsAvlBalanced(audit.is_valid && audit.is_avl);
+
+      const descriptions: Record<string, string> = {
+        creation: 'creación',
+        correction: 'corrección',
+        reactivation: 'reactivación',
+        deletion: 'eliminación',
+        attention_change: 'cambio de atención',
+        parameter_change: 'cambio de parámetro',
+        clock_advance: 'avance del reloj',
+        queue_step: 'paso de cola',
+        mass_archive: 'archivo masivo',
+        global_recovery: 'recuperación global',
+        load: 'carga de escenario',
+      };
+      const target = result.event_id != null
+        ? ` · SIS-${result.event_id}`
+        : result.parameter ? ` · ${result.parameter}`
+          : result.root_id != null ? ` · raíz SIS-${result.root_id}` : '';
+      await Swal.fire({
+        title: 'Acción deshecha',
+        text: `${descriptions[result.undone] ?? result.undone}${target}`,
+        icon: 'success',
+      });
+    } catch (error) {
+      await Swal.fire({
+        title: 'No se pudo deshacer',
+        text: getApiErrorMessage(error, 'No hay acciones disponibles para deshacer'),
+        icon: 'error',
+      });
+    } finally {
+      setIsUndoing(false);
+    }
+  };
+
   return (
     <header className="sticky top-0 z-999 flex w-full bg-white drop-shadow-1 dark:bg-boxdark dark:drop-shadow-none">
       <div className="flex w-full flex-wrap items-center gap-4 px-4 py-3 shadow-2 md:px-6 2xl:px-11">
@@ -229,10 +277,12 @@ const Header = (props: {
             </button>
             <button
               type="button"
+              disabled={isUndoing}
+              onClick={() => void handleUndo()}
               className="inline-flex items-center gap-2 rounded border border-stroke px-3 py-2 text-sm font-medium text-body hover:bg-gray dark:border-strokedark dark:text-bodydark dark:hover:bg-meta-4"
             >
               <Undo2 size={16} aria-hidden="true" />
-              <span>Deshacer</span>
+              <span>{isUndoing ? 'Deshaciendo...' : 'Deshacer'}</span>
             </button>
           </div>
 

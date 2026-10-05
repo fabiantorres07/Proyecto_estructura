@@ -1,6 +1,8 @@
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.dependencies import get_scenario
 from app.domain.event import Event
@@ -8,6 +10,10 @@ from app.domain.report import Report
 from app.domain.scenario import Scenario
 from app.schemas.event import (
     EventCreate,
+    EventAssociationsResponse,
+    EventDirectoryRow,
+    EventQueryResponse,
+    CostlyAccessEventResponse,
     EventResponse,
     EventStatusUpdate,
     EventTreesResponse,
@@ -49,6 +55,26 @@ def _tree_node(node) -> dict | None:
             if child is not None
         ],
     }
+
+
+def _directory_row(event: Event, status_name: str, node_depth: int | None = None) -> dict:
+    return {
+        "event_id": event.event_id,
+        "status": status_name,
+        "magnitude": event.magnitude,
+        "hypocenter_depth": event.depth,
+        "priority": event.priority,
+        "attention_status": event.attention_status.value,
+        "occurred_at": event.occurred_at,
+        "node_depth": node_depth,
+        "cost": node_depth,
+    }
+
+
+def _associated_event(item: dict | None) -> dict | None:
+    if item is None:
+        return None
+    return {"status": item["status"], "event": _event_response(item["event"])}
 
 
 def _raise_http(error: Exception) -> NoReturn:
@@ -109,6 +135,114 @@ def get_event_trees(
     return {
         "avl": _tree_node(scenario.avl_tree.root),
         "bst": _tree_node(scenario.bst_tree.root),
+    }
+
+
+@router.get("/directory", response_model=list[EventDirectoryRow])
+def list_all_events(scenario: Scenario = Depends(get_scenario)):
+    rows = [
+        _directory_row(
+            node.event,
+            "active",
+            scenario.avl_tree.depth_of(node),
+        )
+        for node in scenario.event_index.values()
+    ]
+    rows.extend(
+        _directory_row(event, "archived")
+        for event in scenario.archived_history.values()
+    )
+    rows.extend(
+        {"event_id": event_id, "status": "deleted"}
+        for event_id in scenario.eliminated_IDs
+    )
+    return sorted(rows, key=lambda row: row["event_id"])
+
+
+@router.get("/queries/pending", response_model=EventQueryResponse)
+def query_pending_events(
+    k: int = Query(gt=0),
+    scenario: Scenario = Depends(get_scenario),
+):
+    try:
+        events, visited_nodes = scenario.first_k_pending(k)
+        return {
+            "events": [_event_response(event) for event in events],
+            "visited_nodes": visited_nodes,
+        }
+    except ValueError as error:
+        _raise_http(error)
+
+
+@router.get("/queries/magnitude", response_model=EventQueryResponse)
+def query_magnitude_range(
+    min_mag: float = Query(ge=-2, le=10),
+    max_mag: float = Query(ge=-2, le=10),
+    scenario: Scenario = Depends(get_scenario),
+):
+    try:
+        events, visited_nodes = scenario.events_in_magnitude_range(min_mag, max_mag)
+        return {
+            "events": [_event_response(event) for event in events],
+            "visited_nodes": visited_nodes,
+        }
+    except ValueError as error:
+        _raise_http(error)
+
+
+@router.get("/queries/depth-date", response_model=EventQueryResponse)
+def query_depth_and_date_range(
+    max_depth: float = Query(ge=0, le=700),
+    min_date: datetime = Query(...),
+    max_date: datetime = Query(...),
+    scenario: Scenario = Depends(get_scenario),
+):
+    try:
+        events, visited_nodes = scenario.events_by_depth_and_date(
+            max_depth,
+            min_date,
+            max_date,
+        )
+        return {
+            "events": [_event_response(event) for event in events],
+            "visited_nodes": visited_nodes,
+        }
+    except ValueError as error:
+        _raise_http(error)
+
+
+@router.get("/queries/costly-access", response_model=list[CostlyAccessEventResponse])
+def query_costly_access(scenario: Scenario = Depends(get_scenario)):
+    return [
+        {
+            **item,
+            "event": _event_response(item["event"]),
+        }
+        for item in scenario.costly_access_events()
+    ]
+
+
+@router.get(
+    "/queries/associations/{event_id}",
+    response_model=EventAssociationsResponse,
+)
+def query_event_associations(
+    event_id: int,
+    scenario: Scenario = Depends(get_scenario),
+):
+    try:
+        associations = scenario.event_associations(event_id)
+    except ValueError as error:
+        _raise_http(error)
+    return {
+        "reference": _associated_event(associations["reference"]),
+        "candidates": [
+            _associated_event(item) for item in associations["candidates"]
+        ],
+        "used_as_reference_by": [
+            _associated_event(item)
+            for item in associations["used_as_reference_by"]
+        ],
     }
 
 

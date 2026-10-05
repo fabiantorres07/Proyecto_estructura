@@ -1,5 +1,5 @@
 import { hierarchy, tree } from "d3-hierarchy";
-import { MessageSquareText, Plus, RefreshCw, RotateCw } from "lucide-react";
+import { ListFilter, MessageSquareText, Plus, RefreshCw, RotateCw } from "lucide-react";
 import { KeyboardEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { EventTreeNode } from "../../models/Event/EventTreeNode";
@@ -7,12 +7,20 @@ import { EventTreesResponse } from "../../models/Event/EventTreesResponse";
 import { BalanceRecovery } from "../../models/Mode/BalanceRecovery";
 import { eventService } from "../../services/eventService";
 import { modeService } from "../../services/modeService";
+import { SCENARIO_UNDONE_EVENT } from "../../services/undoService";
 import { getApiErrorMessage } from "../../utils/utils";
 
 interface TreePanelProps {
     title: string;
     rootNode: EventTreeNode | null;
 }
+
+const NODE_WIDTH = 164;
+const NODE_HEIGHT = 82;
+const NODE_X_GAP = 190;
+const NODE_Y_GAP = 132;
+const HORIZONTAL_PADDING = 40;
+const VERTICAL_PADDING = 32;
 
 const TreePanel: React.FC<TreePanelProps> = ({ title, rootNode }) => {
     const navigate = useNavigate();
@@ -27,16 +35,23 @@ const TreePanel: React.FC<TreePanelProps> = ({ title, rootNode }) => {
     }
 
     const layoutRoot = tree<EventTreeNode>()
-        .nodeSize([76, 184])(
+        .nodeSize([NODE_X_GAP, NODE_Y_GAP])(
             hierarchy(rootNode, (node) => node.children),
         );
     const nodes = layoutRoot.descendants();
     const links = layoutRoot.links();
     const minimumX = Math.min(...nodes.map((node) => node.x));
     const maximumX = Math.max(...nodes.map((node) => node.x));
-    const width = Math.max(480, layoutRoot.height * 184 + 120);
-    const height = Math.max(210, maximumX - minimumX + 112);
-    const nodeY = (x: number) => x - minimumX + 56;
+    const width = Math.max(
+        480,
+        maximumX - minimumX + NODE_WIDTH + HORIZONTAL_PADDING * 2,
+    );
+    const height = Math.max(
+        200,
+        layoutRoot.height * NODE_Y_GAP + NODE_HEIGHT + VERTICAL_PADDING * 2,
+    );
+    const nodeX = (x: number) => x - minimumX + HORIZONTAL_PADDING + NODE_WIDTH / 2;
+    const nodeY = (y: number) => y + VERTICAL_PADDING + NODE_HEIGHT / 2;
 
     const openEvent = (eventId: number) => navigate(`/eventos/${eventId}`);
     const handleNodeKeyDown = (event: KeyboardEvent<SVGGElement>, eventId: number) => {
@@ -60,15 +75,15 @@ const TreePanel: React.FC<TreePanelProps> = ({ title, rootNode }) => {
                 >
                     <g fill="none" stroke="#cbd5e1" strokeWidth="1.5">
                         {links.map(({ source, target }) => {
-                            const sourceX = source.y + 56;
-                            const sourceY = nodeY(source.x);
-                            const targetX = target.y + 56;
-                            const targetY = nodeY(target.x);
-                            const midpointX = (sourceX + targetX) / 2;
+                            const sourceX = nodeX(source.x);
+                            const sourceY = nodeY(source.y) + NODE_HEIGHT / 2;
+                            const targetX = nodeX(target.x);
+                            const targetY = nodeY(target.y) - NODE_HEIGHT / 2;
+                            const midpointY = (sourceY + targetY) / 2;
                             return (
                                 <path
                                     key={`${source.data.event_id}-${target.data.event_id}`}
-                                    d={`M ${sourceX} ${sourceY} C ${midpointX} ${sourceY}, ${midpointX} ${targetY}, ${targetX} ${targetY}`}
+                                    d={`M ${sourceX} ${sourceY} C ${sourceX} ${midpointY}, ${targetX} ${midpointY}, ${targetX} ${targetY}`}
                                 />
                             );
                         })}
@@ -79,18 +94,34 @@ const TreePanel: React.FC<TreePanelProps> = ({ title, rootNode }) => {
                         return (
                             <g
                                 key={event_id}
-                                transform={`translate(${node.y + 56}, ${nodeY(node.x)})`}
+                                transform={`translate(${nodeX(node.x)}, ${nodeY(node.y)})`}
                                 role="treeitem"
                                 tabIndex={0}
-                                aria-label={`Evento SIS-${event_id}, magnitud ${magnitude}, ${attention_status}`}
+                                aria-label={`Evento SIS-${event_id}, prioridad ${priority}, magnitud ${magnitude}, ${attention_status}`}
                                 className="cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary"
                                 onClick={() => openEvent(event_id)}
                                 onKeyDown={(event) => handleNodeKeyDown(event, event_id)}
                             >
-                                <circle r="24" fill={fill} stroke="white" strokeWidth="3" />
-                                <text y="4" textAnchor="middle" fill="white" fontSize="10" fontWeight="700">{event_id}</text>
-                                <text y="42" textAnchor="middle" fill="#334155" fontSize="11" fontWeight="600">M {magnitude.toFixed(1)}</text>
-                                <circle cx="17" cy="-17" r="5" fill={attention_status === "reviewed" ? "#a7f3d0" : "#fef3c7"} stroke="white" strokeWidth="1.5" />
+                                <rect
+                                    x={-NODE_WIDTH / 2}
+                                    y={-NODE_HEIGHT / 2}
+                                    width={NODE_WIDTH}
+                                    height={NODE_HEIGHT}
+                                    rx="8"
+                                    fill="white"
+                                    stroke={fill}
+                                    strokeWidth="3"
+                                />
+                                <text x={-NODE_WIDTH / 2 + 12} y="-17" textAnchor="start" fill={fill} fontSize="12" fontWeight="700">
+                                    Prioridad: {priority}
+                                </text>
+                                <text x={-NODE_WIDTH / 2 + 12} y="4" textAnchor="start" fill="#334155" fontSize="12" fontWeight="600">
+                                    Magnitud: {magnitude.toFixed(1)}
+                                </text>
+                                <text x={-NODE_WIDTH / 2 + 12} y="25" textAnchor="start" fill="#334155" fontSize="12" fontWeight="600">
+                                    ID: SIS-{event_id}
+                                </text>
+                                <circle cx={NODE_WIDTH / 2 - 13} cy={-NODE_HEIGHT / 2 + 13} r="5" fill={attention_status === "reviewed" ? "#a7f3d0" : "#fef3c7"} stroke="white" strokeWidth="1.5" />
                             </g>
                         );
                     })}
@@ -124,7 +155,10 @@ const EventTrees = () => {
     };
 
     useEffect(() => {
+        const reloadAfterUndo = () => void loadTrees();
         void loadTrees();
+        window.addEventListener(SCENARIO_UNDONE_EVENT, reloadAfterUndo);
+        return () => window.removeEventListener(SCENARIO_UNDONE_EVENT, reloadAfterUndo);
     }, []);
 
     const balanceAvl = async () => {
@@ -152,6 +186,9 @@ const EventTrees = () => {
                     <h1 className="mt-1 text-2xl font-semibold text-black">Árboles de eventos</h1>
                 </div>
                 <div className="flex gap-2">
+                    <button type="button" onClick={() => navigate("/eventos/consultas")} className="inline-flex items-center gap-2 border border-stroke px-4 py-2.5 font-medium text-black hover:bg-gray-2">
+                        <ListFilter size={17} aria-hidden="true" /> Consultas
+                    </button>
                     <button type="button" onClick={() => void loadTrees()} title="Actualizar árboles" aria-label="Actualizar árboles" className="inline-flex h-10 w-10 items-center justify-center border border-stroke text-gray-600 hover:bg-gray-2">
                         <RefreshCw size={17} />
                     </button>
