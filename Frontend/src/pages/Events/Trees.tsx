@@ -3,6 +3,7 @@ import { Archive, ListFilter, MessageSquareText, Plus, RefreshCw, RotateCw } fro
 import { KeyboardEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Swal from "sweetalert2";
+import { CostlyAccessEventResponse } from "../../models/Event/CostlyAccessEventResponse";
 import { EventTreeNode } from "../../models/Event/EventTreeNode";
 import { EventTreesResponse } from "../../models/Event/EventTreesResponse";
 import { eventService } from "../../services/eventService";
@@ -13,6 +14,7 @@ import { getApiErrorMessage } from "../../utils/utils";
 interface TreePanelProps {
     title: string;
     rootNode: EventTreeNode | null;
+    costlyAccessByEvent?: Map<number, CostlyAccessEventResponse>;
 }
 
 const NODE_WIDTH = 164;
@@ -36,7 +38,7 @@ interface RotationLogEntry {
     }[];
 }
 
-const TreePanel: React.FC<TreePanelProps> = ({ title, rootNode }) => {
+const TreePanel: React.FC<TreePanelProps> = ({ title, rootNode, costlyAccessByEvent }) => {
     const navigate = useNavigate();
 
     if (!rootNode) {
@@ -104,6 +106,7 @@ const TreePanel: React.FC<TreePanelProps> = ({ title, rootNode }) => {
                     </g>
                     {nodes.map((node) => {
                         const { event_id, priority, magnitude, attention_status } = node.data;
+                        const costlyAccess = costlyAccessByEvent?.get(event_id);
                         const fill = priority === 3 ? "#dc4a3d" : priority === 2 ? "#d99a22" : "#168c83";
                         return (
                             <g
@@ -111,7 +114,7 @@ const TreePanel: React.FC<TreePanelProps> = ({ title, rootNode }) => {
                                 transform={`translate(${nodeX(node.x)}, ${nodeY(node.y)})`}
                                 role="treeitem"
                                 tabIndex={0}
-                                aria-label={`Evento SIS-${event_id}, prioridad ${priority}, magnitud ${magnitude}, ${attention_status}`}
+                                aria-label={`Evento SIS-${event_id}, prioridad ${priority}, magnitud ${magnitude}, ${attention_status}${costlyAccess ? `, acceso costoso: profundidad ${costlyAccess.depth} mayor que L (${costlyAccess.limit})` : ""}`}
                                 className="cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-primary"
                                 onClick={() => openEvent(event_id)}
                                 onKeyDown={(event) => handleNodeKeyDown(event, event_id)}
@@ -135,6 +138,13 @@ const TreePanel: React.FC<TreePanelProps> = ({ title, rootNode }) => {
                                 <text x={-NODE_WIDTH / 2 + 12} y="25" textAnchor="start" fill="#334155" fontSize="12" fontWeight="600">
                                     ID: SIS-{event_id}
                                 </text>
+                                {costlyAccess && (
+                                    <g aria-hidden="true">
+                                        <circle cx={NODE_WIDTH / 2 - 31} cy={-NODE_HEIGHT / 2 + 13} r="7" fill="#fef3c7" stroke="#b45309" strokeWidth="1.5" />
+                                        <text x={NODE_WIDTH / 2 - 31} y={-NODE_HEIGHT / 2 + 17} textAnchor="middle" fill="#92400e" fontSize="11" fontWeight="700">!</text>
+                                        <title>Acceso costoso: profundidad {costlyAccess.depth} mayor que L ({costlyAccess.limit})</title>
+                                    </g>
+                                )}
                                 <circle cx={NODE_WIDTH / 2 - 13} cy={-NODE_HEIGHT / 2 + 13} r="5" fill={attention_status === "reviewed" ? "#a7f3d0" : "#fef3c7"} stroke="white" strokeWidth="1.5" />
                             </g>
                         );
@@ -147,6 +157,7 @@ const TreePanel: React.FC<TreePanelProps> = ({ title, rootNode }) => {
 
 const EventTrees = () => {
     const [trees, setTrees] = useState<EventTreesResponse | null>(null);
+    const [costlyAccessByEvent, setCostlyAccessByEvent] = useState<Map<number, CostlyAccessEventResponse>>(new Map());
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [isRecovering, setIsRecovering] = useState(false);
@@ -158,7 +169,21 @@ const EventTrees = () => {
         setLoading(true);
         setError(null);
         try {
-            setTrees(await eventService.getTrees());
+            const [treesResult, costlyAccessResult] = await Promise.allSettled([
+                eventService.getTrees(),
+                eventService.getCostlyAccess(),
+            ]);
+            if (treesResult.status === "rejected") throw treesResult.reason;
+            setTrees(treesResult.value);
+
+            if (costlyAccessResult.status === "fulfilled") {
+                setCostlyAccessByEvent(new Map<number, CostlyAccessEventResponse>(
+                    costlyAccessResult.value.map((item) => [item.event.event_id, item] as const),
+                ));
+            } else {
+                setCostlyAccessByEvent(new Map());
+                setError(getApiErrorMessage(costlyAccessResult.reason, "No se pudo cargar la señal de acceso costoso"));
+            }
         } catch (loadError) {
             setError(getApiErrorMessage(loadError, "No se pudieron cargar los árboles de eventos"));
         } finally {
@@ -295,10 +320,16 @@ const EventTrees = () => {
             {loading ? (
                 <p className="py-12 text-center text-gray-500">Cargando árboles...</p>
             ) : trees ? (
-                <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-                    <TreePanel title="AVL · balanceado" rootNode={trees.avl} />
-                    <TreePanel title="BST · sin balanceo" rootNode={trees.bst} />
-                </div>
+                <>
+                    <p className="flex items-center gap-2 text-sm text-gray-600">
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-amber-700 bg-amber-100 text-xs font-bold text-amber-900" aria-hidden="true">!</span>
+                        Acceso costoso en AVL: prioridad alta y profundidad mayor que L.
+                    </p>
+                    <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                        <TreePanel title="AVL · balanceado" rootNode={trees.avl} costlyAccessByEvent={costlyAccessByEvent} />
+                        <TreePanel title="BST · sin balanceo" rootNode={trees.bst} />
+                    </div>
+                </>
             ) : null}
 
             <section className="border border-stroke bg-white">

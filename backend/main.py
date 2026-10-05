@@ -7,6 +7,7 @@ from app.api.reports import router as reports_router
 from app.api.mode import router as mode_router
 from app.api.events import router as events_router
 from app.api.undo import router as undo_router
+from app.api.parameters import router as parameters_router
 
 app = FastAPI()
 
@@ -29,6 +30,7 @@ app.include_router(reports_router)
 app.include_router(mode_router)
 app.include_router(events_router)
 app.include_router(undo_router)
+app.include_router(parameters_router)
 
 @app.get("/")
 def read_root():

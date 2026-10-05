@@ -180,11 +180,6 @@ const EventQueries = () => {
 
     return (
         <main className="mx-auto max-w-screen-2xl space-y-6 p-4 md:p-6 2xl:p-8">
-            <header className="border-b border-stroke pb-5">
-                <p className="text-sm font-medium uppercase text-meta-5">Consultas e inventario</p>
-                <h1 className="mt-1 text-2xl font-semibold text-black">Eventos</h1>
-            </header>
-
             <nav aria-label="Consultas de eventos" className="flex gap-1 overflow-x-auto border-b border-stroke">
                 {tabs.map((item) => (
                     <button

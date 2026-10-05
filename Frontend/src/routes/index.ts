@@ -24,6 +24,7 @@ const CreateEvent = lazy(() => import ('../pages/Events/Create'));
 const EventTrees = lazy(() => import('../pages/Events/Trees'));
 const EventDetail = lazy(() => import('../pages/Events/Detail'));
 const EventQueries = lazy(() => import('../pages/Events/Queries'));
+const ParameterSettings = lazy(() => import('../pages/Parameters/ParameterSettings'));
 
 const coreRoutes = [
   {
@@ -146,6 +147,11 @@ const coreRoutes = [
     path: '/eventos/crear',
     title: 'Creación de evento',
     component: CreateEvent,
+  },
+  {
+    path: '/configuracion/parametros',
+    title: 'Parámetros globales',
+    component: ParameterSettings,
   }
   
 ];

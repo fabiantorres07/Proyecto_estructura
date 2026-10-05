@@ -307,6 +307,21 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                   Zonas
                 </NavLink>
               </li>
+              <li>
+                <NavLink
+                  to="/configuracion/parametros"
+                  className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
+                    pathname.includes('/configuracion') &&
+                    'bg-graydark dark:bg-meta-4'
+                  }`}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.6 2.77-.08-.02a1.7 1.7 0 0 0-1.77.76l-.04.07h-3.2l-.04-.07a1.7 1.7 0 0 0-1.77-.76l-.08.02-1.6-2.77.06-.06A1.7 1.7 0 0 0 10 15l-.08-.04v-3.2L10 11.72a1.7 1.7 0 0 0-.34-1.88L9.6 9.78l1.6-2.77.08.02a1.7 1.7 0 0 0 1.77-.76l.04-.07h3.2l.04.07a1.7 1.7 0 0 0 1.77.76l.08-.02 1.6 2.77-.06.06A1.7 1.7 0 0 0 19.4 11l.08.04v3.2z" transform="translate(-3 -2)" />
+                  </svg>
+                  Parámetros
+                </NavLink>
+              </li>
             </ul>
           </div>
         </nav>
