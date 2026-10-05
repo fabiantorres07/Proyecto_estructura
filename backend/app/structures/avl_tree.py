@@ -876,50 +876,49 @@ class AVLTree:
         self._collect_subtree_events(node.left_son, events)
         self._collect_subtree_events(node.right_son, events)
         events.append(node.event)
-        
-        def attach_subtree(self, node, parent, was_left_child, balance=True):
-            """Re-engancha un subárbol desprendido con detach_subtree.
-            Es el inverso: cuelga `node` de `parent` (o lo pone como raíz si
-            parent es None) y sube actualizando alturas y rebalanceando.
-            Aumenta _size por la cantidad de nodos del subárbol.
-            """
-            if parent is None:
-                self._set_root(node)
-            elif was_left_child:
-                self._set_left(parent, node)
+
+    def attach_subtree(self, node, parent, was_left_child, balance=True):
+        """Re-engancha un subárbol desprendido con detach_subtree.
+        Es el inverso: cuelga `node` de `parent` (o lo pone como raíz si
+        parent es None) y sube actualizando alturas y rebalanceando.
+        Aumenta _size por la cantidad de nodos del subárbol.
+        """
+        if parent is None:
+            self._set_root(node)
+        elif was_left_child:
+            self._set_left(parent, node)
+        else:
+            self._set_right(parent, node)
+
+        self._size += self._count_nodes(node)
+
+        current = parent
+        while current is not None:
+            parent_of_current = current.parent
+            current_is_left = (
+                parent_of_current is not None and parent_of_current.left_son is current
+            )
+            self._update_height(current)
+            new_root = self._rebalance(current) if balance else current
+            if parent_of_current is None:
+                self._set_root(new_root)
+            elif current_is_left:
+                self._set_left(parent_of_current, new_root)
             else:
-                self._set_right(parent, node)
+                self._set_right(parent_of_current, new_root)
+            current = parent_of_current
 
-            self._size += self._count_nodes(node)
+    def subtree_nodes(self, node):
+        """Lista de nodos del subárbol que empieza en `node` (preorden).
+        Análogo a subtree_events pero devuelve AVLNode, no Event.
+        Se usa en _undo_mass_archive para volver a llenar event_index."""
+        nodes = []
+        self._collect_subtree_nodes(node, nodes)
+        return nodes
 
-            current = parent
-            while current is not None:
-                parent_of_current = current.parent
-                current_is_left = (
-                    parent_of_current is not None and parent_of_current.left_son is current
-                )
-                self._update_height(current)
-                new_root = self._rebalance(current) if balance else current
-                if parent_of_current is None:
-                    self._set_root(new_root)
-                elif current_is_left:
-                    self._set_left(parent_of_current, new_root)
-                else:
-                    self._set_right(parent_of_current, new_root)
-                current = parent_of_current
-
-
-        def subtree_nodes(self, node):
-            """Lista de nodos del subárbol que empieza en `node` (preorden).
-            Análogo a subtree_events pero devuelve AVLNode, no Event.
-            Se usa en _undo_mass_archive para volver a llenar event_index."""
-            nodes = []
-            self._collect_subtree_nodes(node, nodes)
-            return nodes
-
-        def _collect_subtree_nodes(self, node, nodes):
-            if node is None:
-                return
-            nodes.append(node)
-            self._collect_subtree_nodes(node.left_son, nodes)
-            self._collect_subtree_nodes(node.right_son, nodes)
+    def _collect_subtree_nodes(self, node, nodes):
+        if node is None:
+            return
+        nodes.append(node)
+        self._collect_subtree_nodes(node.left_son, nodes)
+        self._collect_subtree_nodes(node.right_son, nodes)
