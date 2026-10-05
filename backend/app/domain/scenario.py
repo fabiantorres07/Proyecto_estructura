@@ -47,7 +47,7 @@ class Scenario:
     def __init__(self, metrics : Optional[dict[str, int]] = None,avl_tree: Optional[AVLTree] = None, bst_tree: Optional[BSTTree] = None, 
                  event_index : Optional[dict[int, AVLNode]] = None, stations : Optional[dict[int, Station]] = None, zones: Optional[list[Zone]] = None, 
                  eliminated_IDs: Optional[set[int]] = None, archived_history: Optional[dict[int, Event]] = None, referenced_by=None, simulation_clock: Optional[datetime] = None, 
-                L: int=3, W: float = 48.0, R: float = 40.0, T: float = 72.0, mode: Mode = Mode.NORMAL, undo_stack: Optional[Stack] = None, report_queue: Optional[Queue] = None):
+                L: int=3, W: float = 48.0, R: float = 40.0, T: float = 72.0, mode: Mode = Mode.NORMAL, undo_stack: Optional[Stack] = None, report_queue: Optional[Queue] = None, versions: Optional[dict[str, dict]] = None):
 
         # Collections for elimination and history.
         self.eliminated_IDs = eliminated_IDs if eliminated_IDs is not None else set()
@@ -85,6 +85,8 @@ class Scenario:
         self.report_queue = report_queue if report_queue is not None else Queue()
 
         self.referenced_by = referenced_by if referenced_by is not None else dict()
+
+        self.versions = versions if versions is not None else dict()
 
     @staticmethod
     def _as_utc(value: datetime) -> datetime:
@@ -613,7 +615,7 @@ class Scenario:
                 y=report.y,
                 occurred_at=report.occurred_at,
                 stations={report.station},       # the set with the report's only station
-                revision=report.revision_num,    # the first revision can be > 1
+                revision=report.revision_num,    # the report's claimed revision (can be > 1)
             )
             # create_event already pushed a CreationAction. Pop it to put it
             # inside the QueueStepAction: one queue step = one action in the
@@ -644,10 +646,32 @@ class Scenario:
                 if report.station not in event.stations:
                     event.stations.add(report.station)
                     confirmed_station_id = report.station.station_id
+
             elif report.revision_num == archived_event.revision:
-                # Confirmation or conflict on an archived event: does not
-                # reactivate it.
-                case = "archived_not_reactivated"
+                # Same revision on an archived event. Section 6 says:
+                #   - Confirmation ("same revision, same data") adds the
+                #     station if it was not already there. The statement
+                #     does NOT distinguish active from archived here.
+                #   - Confirmation does NOT reactivate the archived event
+                #     (that only happens with a greater revision). The
+                #     event stays in archived_history.
+                # So: same data -> add station, stay archived.
+                #     different data -> conflict, touch nothing.
+                same_data = (
+                    report.magnitude == archived_event.magnitude
+                    and report.depth == archived_event.depth
+                    and report.x == archived_event.x
+                    and report.y == archived_event.y
+                    and report.occurred_at == archived_event.occurred_at
+                )
+                if same_data:
+                    case = "archived_confirmed"
+                    if report.station not in archived_event.stations:
+                        archived_event.stations.add(report.station)
+                        confirmed_station_id = report.station.station_id
+                else:
+                    case = "archived_conflict"
+
             else:
                 case = "old"
 
@@ -656,7 +680,11 @@ class Scenario:
             event = self.event_index[event_id].event
 
             if report.revision_num > event.revision:
-                # Greater revision → correct.
+                # Greater revision → correct, using the report's revision
+                # (not current + 1). Section 6: "substitute the current data
+                # with the report's revision". If we let apply_correction
+                # increment, the event would end at revision current + 1
+                # instead of the revision the station actually claims.
                 case = "corrected"
                 changes = {
                     "magnitude": report.magnitude,
@@ -664,6 +692,7 @@ class Scenario:
                     "x": report.x,
                     "y": report.y,
                     "occurred_at": report.occurred_at,
+                    "revision": report.revision_num,
                 }
                 self.correct_event(event_id, changes)
                 inner_action = self.undo_stack.pop()
@@ -730,7 +759,6 @@ class Scenario:
             "event_id": event_id,
             "report": report,
         }
-
     
     """=========================================================================================="""\
     """====================================== EVENT METHODS ======================================"""\
@@ -906,14 +934,14 @@ class Scenario:
             # 4. Apply the correction. Mutates the same event object and returns
             # the key before and the key after.
             old_key, new_key = event.apply_correction(
-                magnitude=changes.get("magnitude"),
-                depth=changes.get("depth"),
-                x=changes.get("x"),
-                y=changes.get("y"),
-                occurred_at=changes.get("occurred_at"),
-                is_in_populated_zone=is_in_populated_zone,
-            )
-
+            magnitude=changes.get("magnitude"),
+            depth=changes.get("depth"),
+            x=changes.get("x"),
+            y=changes.get("y"),
+            occurred_at=changes.get("occurred_at"),
+            revision=changes.get("revision"),
+            is_in_populated_zone=is_in_populated_zone,
+        )
             # 5-6. If the key changed (priority went up/down, or M changed), it
             # must be removed from the trees with the old key and reinserted with
             # the new one. event_index is updated with the NEW node.
@@ -3184,55 +3212,66 @@ class Scenario:
             loaded[name] = self._load_int(value, "metrics", name, 0)
         return loaded
 
+    """==============================================="""
+    """============== VERSIONS (SECTION 13) =========="""
+    """==============================================="""
 
+    def save_version(self, name: str) -> dict:
+        """Save the current scenario state under a name (section 13).
 
+        The state is exported in the same "topology" format that
+        load_scenario consumes, so restoring is just feeding it back.
 
+        Not undoable: it does not change the scenario, it only adds an
+        entry to self.versions. Section 13 does not list "save version"
+        among the undoable actions.
+        """
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("Version name must be a non-empty string")
 
+        name = name.strip()
+        if name in self.versions:
+            raise ValueError(f"A version named '{name}' already exists")
 
+        self.versions[name] = self.export_scenario(load_mode="topology")
+        return {"saved": name, "total_versions": len(self.versions)}
 
+    def list_versions(self) -> list[str]:
+        """Return the names of all saved versions, alphabetically."""
+        return sorted(self.versions.keys())
 
+    def restore_version(self, name: str) -> dict:
+        """Restore a saved version (section 13).
 
+        Reuses load_scenario, so the version data is validated the same
+        way as any file load and a LoadAction is pushed (section 13:
+        "restoring a version is an action that can be undone"). The
+        versions themselves are not touched.
+        """
+        if name not in self.versions:
+            raise KeyError(f"Version '{name}' was not found")
 
+        result = self.load_scenario(self.versions[name])
+        result["restored_version"] = name
+        return result
 
+    def delete_version(self, name: str) -> None:
+        """Delete a saved version by name. Not undoable: section 13 does
+        not list it among the undoable actions."""
+        if name not in self.versions:
+            raise KeyError(f"Version '{name}' was not found")
+        del self.versions[name]
 
+    def export_versions(self) -> dict:
+        """Shallow copy of all saved versions, for the router to write
+        to disk. Shallow is enough: the router only serializes it."""
+        return dict(self.versions)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    def import_versions(self, data: dict) -> None:
+        """Load versions from disk (called by the router at startup)."""
+        if not isinstance(data, dict):
+            raise ValueError("Versions data must be a dict")
+        self.versions = dict(data)
     
     """==============================================="""
     """============TREE STATE (VISTAS)================"""

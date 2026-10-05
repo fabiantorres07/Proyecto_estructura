@@ -14,18 +14,32 @@ def _check_one_decimal(value: float) -> float:
 
 
 class ReportCreate(BaseModel):
-    """Datos que envía el usuario al preparar un reporte de una estación.
+    """Data sent by the user when preparing a report from a station.
 
-    Aquí se validan los rangos y formatos que NO dependen del estado del
-    escenario (política acordada: los rangos van en los schemas). Lo que sí
-    depende del estado —que la estación exista y que la fecha no sea
-    posterior al reloj de simulación— lo valida Scenario.enqueue_report.
+    Range and format validations that DO NOT depend on the scenario state
+    happen here (agreed policy: ranges go in the schemas). What DOES
+    depend on the state —that the station exists and that the date is not
+    later than the simulation clock— is validated by
+    Scenario.enqueue_report.
 
-    No se valida aquí si el id está activo, archivado o eliminado: eso se
-    decide al PROCESAR el reporte, porque entre encolar y procesar el estado
-    del id puede cambiar (por ejemplo, al deshacer una eliminación)."""
+    The check of whether the id is active, archived, or eliminated is NOT
+    done here: it is decided when PROCESSING the report, because between
+    enqueue and process the state of the id can change (for example, when
+    undoing a deletion).
+
+    The `revision_num` is the revision CLAIMED BY THE EMITTING STATION,
+    not a value the backend computes. That is what makes confirmation,
+    conflict, and old reports possible (section 6 table):
+      - revision > current                     -> correction
+      - revision == current, same data         -> confirmation
+      - revision == current, different data    -> conflict
+      - revision < current                     -> old
+    If the backend always computed "current + 1", every report would land
+    as a correction and the other cases would never trigger.
+    """
 
     event_id: int = Field(ge=1, le=999999)
+    revision_num: int = Field(ge=1)
     station_id: str = Field(min_length=1)
     magnitude: float = Field(ge=-2.0, le=10.0, allow_inf_nan=False)
     depth: float = Field(ge=0.0, le=700.0, allow_inf_nan=False)
@@ -43,15 +57,14 @@ class ReportCreate(BaseModel):
     @field_validator("occurred_at")
     @classmethod
     def utc_with_seconds_precision(cls, value: datetime) -> datetime:
-        """Exige zona horaria, exige precisión de segundos y normaliza a UTC.
-        Guardar siempre en UTC hace que la comparación de "iguales datos"
-        (sección 6) no dependa del formato con que llegó la fecha."""
+        """Requires timezone, requires second precision, normalizes to UTC.
+        Storing always in UTC makes the "same data" comparison (section 6)
+        independent of the input format."""
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("occurred_at must include a timezone")
         if value.microsecond != 0:
             raise ValueError("occurred_at must have a precision of seconds")
         return value.astimezone(timezone.utc)
-
 
 class ReportBatchCreate(BaseModel):
     """Ráfaga de reportes de N estaciones (N >= 1, sección 8). Se encolan

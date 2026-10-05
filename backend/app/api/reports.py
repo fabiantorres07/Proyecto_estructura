@@ -22,20 +22,21 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 # encolado no se puede quitar individualmente, solo vaciar toda la cola.
 
 
-def _build_report(
-    data: ReportCreate,
-    scenario: Scenario,
-    preceding_reports: list[Report] | None = None,
-) -> Report:
-    """Convierte el schema en el objeto de dominio. La estación se busca en
-    el escenario porque Report guarda el objeto Station, no solo su id.
-    Lanza KeyError si la estación no existe."""
+def _build_report(data: ReportCreate, scenario: Scenario) -> Report:
+    """Turn the schema into the domain object.
+
+    The revision comes directly from the payload (it is what the emitting
+    station claims), so the backend does NOT recompute it. Recomputing it
+    with next_report_revision() would always produce "current + 1" and
+    force every report into the correction case, breaking the confirmation,
+    conflict, and old cases of the section 6 table.
+
+    The station is looked up in the scenario because Report stores the
+    Station object, not just its id. Raises KeyError if it does not exist.
+    """
     return Report(
         event_id=data.event_id,
-        revision_num=scenario.next_report_revision(
-        data.event_id,
-            preceding_reports,
-        ),
+        revision_num=data.revision_num,
         station=scenario.get_station(data.station_id),
         magnitude=data.magnitude,
         depth=data.depth,
@@ -43,7 +44,6 @@ def _build_report(
         y=data.y,
         occurred_at=data.occurred_at,
     )
-
 
 def _to_response(report: Report, position: int) -> dict:
     """Report -> datos de ReportResponse. Se arma a mano porque el
@@ -106,9 +106,7 @@ def enqueue_report_batch(
     """Prepara una ráfaga de reportes de N estaciones. Todo o nada: si uno
     falla, no se encola ninguno."""
     try:
-        reports = []
-        for item in data.reports:
-            reports.append(_build_report(item, scenario, reports))
+        reports = [_build_report(item, scenario) for item in data.reports]
         first_position = scenario.enqueue_reports(reports)
         return [
             _to_response(report, first_position + offset)

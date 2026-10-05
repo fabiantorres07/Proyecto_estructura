@@ -107,7 +107,7 @@ def create_event(
         station = scenario.get_station(data.station_id)
         report = Report(
             event_id=data.event_id,
-            revision_num=scenario.next_report_revision(data.event_id),
+            revision_num=data.revision_num,
             station=station,
             magnitude=data.magnitude,
             depth=data.depth,

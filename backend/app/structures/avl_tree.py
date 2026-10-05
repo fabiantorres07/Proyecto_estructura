@@ -232,6 +232,34 @@ class AVLTree:
         for metric_key, amount in delta.items():
             self.metrics[metric_key] -= amount
 
+    def _rebalance_until_stable(self, node):
+        """Rebalance `node` until its balance factor is in {-1, 0, 1},
+        even if the initial imbalance is more than 2.
+
+        Standard insert/delete only need one rotation per node on the way
+        up, because the imbalance there is at most 2. But detach_subtree
+        removes an ENTIRE subtree at once, which can leave the parent
+        with a much larger imbalance. A single rotation per level is not
+        enough in that case.
+
+        This helper loops: rotate until the node is balanced, and after
+        each rotation recursively repair the subtree that dropped down
+        (it may also be unbalanced). It mirrors what _recover does,
+        restricted to a single subtree.
+
+        Returns the new root of the balanced subtree.
+        """
+        self._update_height(node)
+        while abs(node.balance_factor) > 1:
+            left_heavy = node.balance_factor > 1
+            node = self._rebalance(node)
+            if left_heavy:
+                self._set_right(node, self._recover(node.right_son))
+            else:
+                self._set_left(node, self._recover(node.left_son))
+            self._update_height(node)
+        return node
+
     # ==================================================================
     # Inserción
     # ==================================================================
@@ -788,43 +816,45 @@ class AVLTree:
         return 1 + self._count_nodes(node.left_son) + self._count_nodes(node.right_son)
 
     def detach_subtree(self, node, balance=True):
-        """Desprende el subárbol cuya raíz es `node` del árbol, dejando el
-        resto del AVL balanceado.
+        """Detach the subtree rooted at `node` from the tree, leaving the
+        rest of the AVL balanced.
 
-        el parámetro balance=True esta para que respete el modo estrés, igual que insert y delete. Si estás en modo NORMAL, se pasa True (rota). 
-        Si está en STRESS, False (no rota). El caller (Scenario) decide.
+        The `balance` parameter makes it respect stress mode, same as
+        insert and delete. In normal mode it rotates; in stress mode it
+        does not. The caller (Scenario) decides.
 
-        Devuelve (node, former_parent, was_left_child):
-        - node: la raíz del subárbol desprendido (ya sin padre)
+        Returns (node, former_parent, was_left_child):
+        - node: the root of the detached subtree (already without parent)
+        - former_parent: the node it hung from, or None if `node` was the
+          root of the tree
+        - was_left_child: True if `node` was the left child of former_parent,
+          False if it was the right one. If former_parent is None, the value
+          does not matter (the tree is left empty).
 
-        - former_paren: el nodo del que colgaba `node`, o None si `node` era la raíz del árbol
+        Steps:
+        1. Save the position of the node (its parent and which side it
+           hung from).
+        2. Disconnect it: the parent loses that child, the node loses its
+           parent.
+        3. Subtract from _size the number of nodes of the detached subtree.
+        4. Go up from former_parent to the root, updating heights and
+           rebalancing AT EACH LEVEL UNTIL STABLE, because detaching an
+           entire subtree can leave a node with an imbalance greater than 2.
 
-        - was_left_child: True si `node` era hijo izquierdo de former_parent, False si era derecho. 
-        Si former_parent es None, el valor no importa (el árbol queda vacío).
+        Stress mode: if `balance=False`, no rotation; only heights are
+        updated. The tree keeps BST order but may end up unbalanced.
 
-        Qué hace:
-        1. Guarda la posición del nodo (su padre y de qué lado colgaba).
-        2. Lo desengancha: el padre pierde ese hijo, el nodo pierde su padre.
-        3. Resta del _size la cantidad de nodos del subárbol desprendido.
-        4. Sube desde former_parent hasta la raíz actualizando alturas y
-            rebalanceando en cada paso, porque el lado afectado perdió
-            altura de golpe.
-
-        Modo estrés: si `balance=False` no se rota; solo se actualizan
-        alturas. El árbol queda con orden BST pero posiblemente desbalanceado.
-
-        Casos que cubre:
-        - node es una hoja: former_parent pierde una hoja, sube actualizando.
-        - node es la raíz del árbol: el árbol queda vacío.
-        - node tiene hijos: se lleva todo el subárbol con él.
-        - former_parent tenía 2 hijos y ahora tiene 1: se actualiza y rebalancea.
-
-        Costo: O(log n) en modo normal, O(n) por `_count_nodes`.
+        Cost: O(log n) in normal mode, O(n) for `_count_nodes`.
         """
+        # Reset the last-operation rotation log so the delta captured
+        # AFTER this call reflects only the rotations produced HERE, not
+        # the ones from whatever operation ran before.
+        self.last_rotations = []
+
         former_parent = node.parent
         was_left_child = former_parent is not None and former_parent.left_son is node
 
-        # 1. Desenganchar del padre (o quitar como raíz si no tiene padre).
+        # 1. Disconnect from the parent (or remove it as root if it has none).
         if former_parent is None:
             self._set_root(None)
         elif was_left_child:
@@ -832,15 +862,15 @@ class AVLTree:
         else:
             former_parent.right_son = None
 
-        # 2. Restar del tamaño total los nodos que se llevó el subárbol.
+        # 2. Subtract from total size the nodes the subtree took with it.
         self._size -= self._count_nodes(node)
 
-        # 3. El nodo desprendido ya no está en el árbol.
+        # 3. The detached node is no longer in the tree.
         node.parent = None
 
-        # 4. Subir desde former_parent hasta la raíz, actualizando alturas y
-        # rebalanceando. Guardamos parent_of_current ANTES de rebalancear
-        # porque _rebalance puede rotar y cambiar current.parent.
+        # 4. Go up from former_parent to the root, updating heights and
+        # rebalancing. We save parent_of_current BEFORE rebalancing,
+        # because _rebalance can rotate and change current.parent.
         current = former_parent
         while current is not None:
             parent_of_current = current.parent
@@ -848,10 +878,13 @@ class AVLTree:
                 parent_of_current is not None and parent_of_current.left_son is current
             )
 
-            self._update_height(current)
-            new_root = self._rebalance(current) if balance else current
+            if balance:
+                current = self._rebalance_until_stable(current)
+            else:
+                self._update_height(current)
+            new_root = current
 
-            # Re-enganchar new_root al padre de current (por si hubo rotación).
+            # Reattach new_root to current's parent (if a rotation happened).
             if parent_of_current is None:
                 self._set_root(new_root)
             elif current_is_left:
@@ -878,10 +911,14 @@ class AVLTree:
         events.append(node.event)
 
     def attach_subtree(self, node, parent, was_left_child, balance=True):
-        """Re-engancha un subárbol desprendido con detach_subtree.
-        Es el inverso: cuelga `node` de `parent` (o lo pone como raíz si
-        parent es None) y sube actualizando alturas y rebalanceando.
-        Aumenta _size por la cantidad de nodos del subárbol.
+        """Reattach a subtree detached with detach_subtree.
+
+        It is the inverse: hangs `node` from `parent` (or sets it as root
+        if parent is None) and goes up updating heights and rebalancing
+        until each level is stable, because attaching an entire subtree
+        can leave a node with an imbalance greater than 2.
+
+        Increases _size by the number of nodes in the subtree.
         """
         if parent is None:
             self._set_root(node)
@@ -898,14 +935,20 @@ class AVLTree:
             current_is_left = (
                 parent_of_current is not None and parent_of_current.left_son is current
             )
-            self._update_height(current)
-            new_root = self._rebalance(current) if balance else current
+
+            if balance:
+                current = self._rebalance_until_stable(current)
+            else:
+                self._update_height(current)
+            new_root = current
+
             if parent_of_current is None:
                 self._set_root(new_root)
             elif current_is_left:
                 self._set_left(parent_of_current, new_root)
             else:
                 self._set_right(parent_of_current, new_root)
+
             current = parent_of_current
 
     def subtree_nodes(self, node):
