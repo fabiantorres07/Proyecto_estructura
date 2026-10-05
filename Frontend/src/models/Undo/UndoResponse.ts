@@ -6,4 +6,5 @@ export interface UndoResponse {
     zone_name?: string | null;
     station_id?: string | null;
     removed?: number | null;
+    count?: number | null;
 }

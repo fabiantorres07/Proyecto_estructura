@@ -390,6 +390,12 @@ class ClearReportQueueAction:
         self.reports = reports
 
 
+class ReportEnqueueAction:
+  def __init__(self, reports: list[Report], batch: bool):
+    self.reports = reports
+    self.batch = batch
+
+
 class ZoneAction:
     def __init__(self, operation: str, old_zone: Optional[Zone], new_zone: Optional[Zone], index: int):
         self.operation = operation

@@ -98,9 +98,14 @@ const ReportReviewNext = () => {
         setSaving(true);
         try {
             const result = await reportService.processNextReport();
+            const rotationSummary = result.rotations.length > 0
+                ? result.rotations.map((rotation) => (
+                    `${rotation.case} · SIS-${rotation.event_id} · factor ${rotation.balance_factor} · ${rotation.rotations.map((direction) => direction === "left" ? "giro izquierdo" : "giro derecho").join(" → ")}`
+                )).join("\n")
+                : "Sin rotaciones AVL";
             await Swal.fire({
                 title: "Reporte procesado",
-                text: `${result.case} · SIS-${result.event_id} · revisión ${result.revision_num}`,
+                text: `${result.case} · SIS-${result.event_id} · revisión ${result.revision_num}\nEstación reportante: ${result.station_id}\nRotaciones AVL:\n${rotationSummary}`,
                 icon: "success",
             });
             await loadReview();

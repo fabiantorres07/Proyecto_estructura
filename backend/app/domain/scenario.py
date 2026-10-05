@@ -15,7 +15,7 @@ from app.domain.action import (
     CreationAction, CorrectionAction, AttentionChangeAction, DeletionAction,
     ParameterChangeAction, ClockAdvanceAction, QueueStepAction, MassArchiveAction,
     GlobalRecoveryAction, LoadAction, ReactivationAction, ClearReportQueueAction,
-    ZoneAction, StationAction,
+    ReportEnqueueAction, ZoneAction, StationAction,
 )
 from app.structures.avl_tree import AVLTree, ROTATION_METRIC_KEYS, AVLTopologySnapshot
 from app.structures.avl_node import AVLNode
@@ -558,6 +558,7 @@ class Scenario:
         stays unchanged. O(1)."""
         self._validate_report(report)
         self.report_queue.enqueue(report)
+        self.undo_stack.push(ReportEnqueueAction([report], batch=False))
         return len(self.report_queue)
 
     def enqueue_reports(self, reports: list[Report]) -> int:
@@ -571,6 +572,8 @@ class Scenario:
         first_position = len(self.report_queue) + 1
         for report in reports:
             self.report_queue.enqueue(report)
+        if reports:
+            self.undo_stack.push(ReportEnqueueAction(list(reports), batch=True))
         return first_position
 
     def list_reports(self) -> list[Report]:
@@ -1847,6 +1850,8 @@ class Scenario:
             return self._undo_load(action)
         elif isinstance(action, ClearReportQueueAction):
             return self._undo_clear_report_queue(action)
+        elif isinstance(action, ReportEnqueueAction):
+            return self._undo_report_enqueue(action)
         elif isinstance(action, ZoneAction):
             return self._undo_zone_change(action)
         elif isinstance(action, StationAction):
@@ -1863,6 +1868,17 @@ class Scenario:
         for report in action.reports:
             self.report_queue.enqueue(report)
         return {"undone": "report_queue_clear", "removed": len(action.reports)}
+
+    def _undo_report_enqueue(self, action: ReportEnqueueAction) -> dict:
+        removed = 0
+        for report in action.reports:
+            try:
+                self.report_queue.remove(report)
+                removed += 1
+            except ValueError:
+                pass
+        action_name = "report_batch_enqueue" if action.batch else "report_enqueue"
+        return {"undone": action_name, "count": removed}
 
     def _undo_zone_change(self, action: ZoneAction) -> dict:
         if action.operation == "create":

@@ -13,9 +13,21 @@ interface MyFormProps {
     report?: ReportFormValues | null;
     stations: Station[];
     onFormChange?: () => void;
+    batchMode?: boolean;
+    selectedStationIds?: string[];
+    onSelectedStationIdsChange?: (stationIds: string[]) => void;
 }
 
-const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report, stations, onFormChange }) => {
+const ReportFormValidator: React.FC<MyFormProps> = ({
+    mode,
+    handleAction,
+    report,
+    stations,
+    onFormChange,
+    batchMode = false,
+    selectedStationIds = [],
+    onSelectedStationIdsChange,
+}) => {
     const navigate = useNavigate();
 
     return (
@@ -47,7 +59,9 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
                     .integer("El número del id debe ser un entero")
                     .min(1, "El id del evento debe estar entre 1 y 999999")
                     .max(999999, "El id del evento debe estar entre 1 y 999999"),
-                station_id: Yup.string().required("La estación de donde proviene el informe es obligatoria"),
+                station_id: batchMode
+                    ? Yup.string().notRequired()
+                    : Yup.string().required("La estación de donde proviene el informe es obligatoria"),
                 magnitude: Yup.number().required("La magnitud del evento es obligatoria")
                     .min(-2,"La magnitud del evento debe estar entre -2 y 10")
                     .max(10,"La magnitud del evento debe estar entre -2 y 10")
@@ -145,37 +159,46 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
                     />
                 </div>
 
-                <div>
-                    <label
-                        htmlFor="station_id"
-                        className="block text-lg font-medium text-gray-700"
-                    >
-                        Estación
-                    </label>
-
-                    <Field
-                        as="select"
-                        name="station_id"
-                        className="w-full border border-gray-300 rounded-md p-2 bg-white"
-                    >
-                        <option value="">Seleccione una estación</option>
-
-                        {stations.map((station) => (
-                            <option
-                                key={station.station_id}
-                                value={station.station_id}
-                            >
-                                {`Estación ${station.station_id}`}
-                            </option>
-                        ))}
-                    </Field>
-
-                    <ErrorMessage
-                        name="station_id"
-                        component="p"
-                        className="text-danger text-sm"
-                    />
-                </div>
+                {batchMode ? (
+                    <fieldset className="space-y-3">
+                        <legend className="block text-lg font-medium text-gray-700">Estaciones emisoras</legend>
+                        <p className="text-sm text-gray-500">Se creará un reporte idéntico por cada estación seleccionada.</p>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                            {stations.map((station) => {
+                                const stationId = station.station_id ?? "";
+                                return (
+                                    <label key={stationId} className="flex items-center gap-2 border border-stroke px-3 py-2 text-sm text-black">
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedStationIds.includes(stationId)}
+                                            onChange={(event) => {
+                                                const nextStationIds = event.target.checked
+                                                    ? [...selectedStationIds, stationId]
+                                                    : selectedStationIds.filter((id) => id !== stationId);
+                                                onSelectedStationIdsChange?.(nextStationIds);
+                                            }}
+                                        />
+                                        Estación {stationId}
+                                    </label>
+                                );
+                            })}
+                        </div>
+                        {stations.length === 0 && <p className="text-sm text-danger">No hay estaciones disponibles.</p>}
+                    </fieldset>
+                ) : (
+                    <div>
+                        <label htmlFor="station_id" className="block text-lg font-medium text-gray-700">Estación</label>
+                        <Field as="select" name="station_id" className="w-full border border-gray-300 rounded-md p-2 bg-white">
+                            <option value="">Seleccione una estación</option>
+                            {stations.map((station) => (
+                                <option key={station.station_id} value={station.station_id}>
+                                    {`Estación ${station.station_id}`}
+                                </option>
+                            ))}
+                        </Field>
+                        <ErrorMessage name="station_id" component="p" className="text-danger text-sm" />
+                    </div>
+                )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
@@ -316,7 +339,7 @@ const ReportFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, report
                             ${mode === 1 ? "bg-primary" : "bg-meta-3"}
                         `}
                     >
-                        {mode === 1 ? "Crear" : mode === 3 ? "Guardar cambios" : "Actualizar"}
+                        {mode === 1 ? (batchMode ? "Crear lote" : "Crear") : mode === 3 ? "Guardar cambios" : "Actualizar"}
                     </button>
                 </div>
             </Form>

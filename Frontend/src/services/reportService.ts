@@ -49,11 +49,27 @@ class ReportService {
                 ...(ocurred_at ? { occurred_at: ocurred_at.toISOString() } : {}),
             };
             const response = await axios.post<ReportFormValues>(API_URL, requestBody);
+            if (typeof window !== "undefined") {
+                window.dispatchEvent(new Event(SCENARIO_STATE_CHANGED_EVENT));
+            }
             return response.data;
         } catch (error) {
             console.error("Error al crear reporte:", error);
             throw error;
         }
+    }
+
+    async createReportsBatch(reports: Report[]): Promise<ReportFormValues[]> {
+        const response = await axios.post<ReportFormValues[]>(`${API_URL}/batch`, {
+            reports: reports.map(({ ocurred_at, ...report }) => ({
+                ...report,
+                ...(ocurred_at ? { occurred_at: ocurred_at.toISOString() } : {}),
+            })),
+        });
+        if (typeof window !== "undefined") {
+            window.dispatchEvent(new Event(SCENARIO_STATE_CHANGED_EVENT));
+        }
+        return response.data;
     }
 
     async getNextReport(): Promise<ReportReviewResponse> {

@@ -9,3 +9,4 @@ class UndoResponse(BaseModel):
     zone_name: str | None = None
     station_id: str | None = None
     removed: int | None = None
+    count: int | None = None

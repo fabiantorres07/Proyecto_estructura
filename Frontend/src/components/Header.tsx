@@ -165,6 +165,8 @@ const Header = (props: {
         global_recovery: 'recuperación global',
         load: 'carga de escenario',
         report_queue_clear: 'limpieza de la cola de reportes',
+        report_enqueue: 'alta de reporte',
+        report_batch_enqueue: 'alta de lote de reportes',
         zone_create: 'creación de zona',
         zone_update: 'actualización de zona',
         zone_delete: 'eliminación de zona',
@@ -178,7 +180,8 @@ const Header = (props: {
           : result.root_id != null ? ` · raíz SIS-${result.root_id}`
             : result.zone_name ? ` · ${result.zone_name}`
               : result.station_id ? ` · ${result.station_id}`
-                : result.removed != null ? ` · ${result.removed} reportes restaurados` : '';
+                : result.removed != null ? ` · ${result.removed} reportes restaurados`
+                  : result.count != null ? ` · ${result.count} reportes retirados de la cola` : '';
       await Swal.fire({
         title: 'Acción deshecha',
         text: `${descriptions[result.undone] ?? result.undone}${target}`,

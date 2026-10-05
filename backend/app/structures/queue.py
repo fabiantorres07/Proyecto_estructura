@@ -31,6 +31,13 @@ class Queue:
     def insert_at(self, position, item):
         self._items.insert(position, item)
 
+    def remove(self, item):
+        """Remove the exact queued object, preserving all other order."""
+        for index, queued_item in enumerate(self._items):
+            if queued_item is item:
+                return self._items.pop(index)
+        raise ValueError("Item not found in queue")
+
     def items(self):
         return list(self._items)
 
