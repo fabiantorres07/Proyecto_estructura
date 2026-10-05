@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import Swal from "sweetalert2";
 import EventFormValidator from "../../components/events/EventFormValidator";
@@ -27,6 +27,8 @@ const EventDetail = () => {
     const [mapError, setMapError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [deleting, setDeleting] = useState(false);
+    const [editing, setEditing] = useState(false);
+    const [saving, setSaving] = useState(false);
 
     useEffect(() => {
         let active = true;
@@ -84,6 +86,38 @@ const EventDetail = () => {
                 text: getApiErrorMessage(error, "No se pudo marcar el evento como revisado"),
                 icon: "error",
             });
+        }
+    };
+
+    const correctEvent = async (values: Event | EventApiResponse) => {
+        if (!event || event.status === "archived") return;
+        setSaving(true);
+        try {
+            const updatedEvent = await eventService.correctEvent(event.event_id, {
+                magnitude: Number(values.magnitude),
+                depth: Number(values.depth),
+                x: Number(values.x),
+                y: Number(values.y),
+                ...("ocurred_at" in values && values.ocurred_at instanceof Date
+                    ? { occurred_at: values.ocurred_at }
+                    : {}),
+            });
+            setEvent({ ...updatedEvent, status: "active" });
+            setAssociations(await eventService.getAssociations(event.event_id));
+            setEditing(false);
+            await Swal.fire({
+                title: "Evento actualizado",
+                text: `Se guardaron los cambios de SIS-${event.event_id}.`,
+                icon: "success",
+            });
+        } catch (error) {
+            await Swal.fire({
+                title: "No se pudo corregir el evento",
+                text: getApiErrorMessage(error, "Verifica los datos e inténtalo de nuevo."),
+                icon: "error",
+            });
+        } finally {
+            setSaving(false);
         }
     };
 
@@ -156,22 +190,54 @@ const EventDetail = () => {
             ) : event ? (
                 <>
                     <div className="flex justify-end">
-                        <button
-                            type="button"
-                            disabled={deleting}
-                            onClick={() => void deleteEvent()}
-                            className="inline-flex items-center gap-2 border border-danger px-4 py-2 font-medium text-danger hover:bg-danger hover:text-white disabled:cursor-wait disabled:opacity-60"
-                        >
-                            <Trash2 size={16} aria-hidden="true" />
-                            {deleting ? "Eliminando..." : "Eliminar evento"}
-                        </button>
+                        {event.status === "archived" ? (
+                            <span className="border border-warning bg-warning/10 px-3 py-1.5 text-sm font-medium text-warning">
+                                Archivado
+                            </span>
+                        ) : (
+                            <div className="flex gap-2">
+                                {!editing && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setEditing(true)}
+                                        className="inline-flex items-center gap-2 border border-primary px-4 py-2 font-medium text-primary hover:bg-primary hover:text-white"
+                                    >
+                                        <Pencil size={16} aria-hidden="true" />
+                                        Editar evento
+                                    </button>
+                                )}
+                                {!editing && (
+                                    <button
+                                        type="button"
+                                        disabled={deleting}
+                                        onClick={() => void deleteEvent()}
+                                        className="inline-flex items-center gap-2 border border-danger px-4 py-2 font-medium text-danger hover:bg-danger hover:text-white disabled:cursor-wait disabled:opacity-60"
+                                    >
+                                        <Trash2 size={16} aria-hidden="true" />
+                                        {deleting ? "Eliminando..." : "Eliminar evento"}
+                                    </button>
+                                )}
+                            </div>
+                        )}
                     </div>
-                    <EventFormValidator
-                        mode={3}
-                        event={event}
-                        stations={[]}
-                        handleAction={markReviewed}
-                    />
+                    {editing ? (
+                        <EventFormValidator
+                            mode={2}
+                            event={event}
+                            stations={[]}
+                            saving={saving}
+                            onCancel={() => setEditing(false)}
+                            handleAction={correctEvent}
+                        />
+                    ) : (
+                        <EventFormValidator
+                            mode={3}
+                            event={event}
+                            stations={[]}
+                            archived={event.status === "archived"}
+                            handleAction={markReviewed}
+                        />
+                    )}
                     <section className="space-y-4 border border-stroke bg-white p-5">
                         <header className="border-b border-stroke pb-3">
                             <h2 className="text-lg font-semibold text-black">Eventos asociados</h2>

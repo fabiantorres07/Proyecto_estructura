@@ -11,6 +11,14 @@ import { BranchArchiveResult } from "../models/Event/BranchArchiveResult";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/events`;
 
+export interface EventCorrectionRequest {
+    magnitude: number;
+    depth: number;
+    x: number;
+    y: number;
+    occurred_at?: Date;
+}
+
 class EventService {
     async getTrees(): Promise<EventTreesResponse> {
         const response = await axios.get<EventTreesResponse>(`${API_URL}/trees`);
@@ -47,6 +55,17 @@ class EventService {
             `${API_URL}/${eventId}/status`,
             { attention_status: "reviewed" },
         );
+        return response.data;
+    }
+
+    async correctEvent(eventId: number, correction: EventCorrectionRequest): Promise<EventApiResponse> {
+        const response = await axios.patch<EventApiResponse>(`${API_URL}/${eventId}`, {
+            ...correction,
+            ...(correction.occurred_at ? { occurred_at: correction.occurred_at.toISOString() } : {}),
+        });
+        if (typeof window !== "undefined") {
+            window.dispatchEvent(new Event("sismolab:scenario-state-changed"));
+        }
         return response.data;
     }
 

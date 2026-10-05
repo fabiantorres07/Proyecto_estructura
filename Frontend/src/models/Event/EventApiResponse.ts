@@ -2,6 +2,7 @@ import { AttentionStatus } from "./AttentionStatus";
 
 export interface EventApiResponse {
     event_id: number;
+    status?: "active" | "archived";
     magnitude: number;
     depth: number;
     x: number;

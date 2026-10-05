@@ -13,9 +13,12 @@ interface MyFormProps {
     handleAction: (values: Event | EventApiResponse) => void;
     event?: Event | EventApiResponse | null;
     stations: Station[];
+    archived?: boolean;
+    saving?: boolean;
+    onCancel?: () => void;
 }
 
-const EventFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, event, stations }) => {
+const EventFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, event, stations, archived = false, saving = false, onCancel }) => {
     const navigate = useNavigate();
     const eventOccurredAt = event
         ? ("occurred_at" in event ? event.occurred_at : event.ocurred_at)
@@ -50,14 +53,16 @@ const EventFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, event, 
                     <button type="button" onClick={() => navigate(-1)} className="rounded-sm border border-stroke px-4 py-2 font-medium text-black hover:bg-gray-2">
                         Volver
                     </button>
-                    <button
-                        type="button"
-                        disabled={details.attention_status === "reviewed"}
-                        onClick={() => handleAction(details)}
-                        className="rounded-sm bg-meta-3 px-4 py-2 font-medium text-white hover:bg-opacity-90 disabled:cursor-not-allowed disabled:bg-gray-400"
-                    >
-                        {details.attention_status === "reviewed" ? "Ya revisado" : "Marcar revisado"}
-                    </button>
+                    {!archived && (
+                        <button
+                            type="button"
+                            disabled={details.attention_status === "reviewed"}
+                            onClick={() => handleAction(details)}
+                            className="rounded-sm bg-meta-3 px-4 py-2 font-medium text-white hover:bg-opacity-90 disabled:cursor-not-allowed disabled:bg-gray-400"
+                        >
+                            {details.attention_status === "reviewed" ? "Ya revisado" : "Marcar revisado"}
+                        </button>
+                    )}
                 </div>
             </section>
         );
@@ -247,7 +252,7 @@ const EventFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, event, 
 
 
             {/* ESTACIONES */}
-            <div>
+            {mode !== 2 && <div>
                 <label className="block text-lg font-medium text-gray-700">
                     Estaciones que reportaron el sismo
                 </label>
@@ -277,7 +282,7 @@ const EventFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, event, 
                     component="p"
                     className="text-danger text-sm"
                 />
-            </div>
+            </div>}
 
 
             {/* MAGNITUD Y PROFUNDIDAD */}
@@ -401,7 +406,7 @@ const EventFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, event, 
 
 
             {/* ESTADO DE ATENCIÓN */}
-            <div>
+            {mode !== 2 && <div>
                 <label
                     htmlFor="attention_status"
                     className="block text-lg font-medium text-gray-700"
@@ -419,7 +424,7 @@ const EventFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, event, 
                     <option value="in_progress">En progreso</option>
                     <option value="attended">Atendido</option>
                 </Field>
-            </div>
+            </div>}
 
 
             {/* SOLO SE MUESTRAN EN EDICIÓN */}
@@ -467,7 +472,8 @@ const EventFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, event, 
             <div className="flex justify-end gap-3 pt-2">
                 <button
                     type="button"
-                    onClick={() => navigate(-1)}
+                    disabled={saving}
+                    onClick={() => onCancel ? onCancel() : navigate(-1)}
                     className="
                         inline-flex items-center justify-center
                         rounded-full
@@ -484,6 +490,7 @@ const EventFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, event, 
 
                 <button
                     type="submit"
+                    disabled={saving}
                     className={`
                         inline-flex items-center justify-center
                         rounded-full
@@ -493,7 +500,7 @@ const EventFormValidator: React.FC<MyFormProps> = ({ mode, handleAction, event, 
                         ${mode === 1 ? "bg-primary" : "bg-meta-3"}
                     `}
                 >
-                    {mode === 1 ? "Crear" : "Actualizar"}
+                    {mode === 1 ? "Crear" : saving ? "Guardando..." : mode === 2 ? "Guardar cambios" : "Actualizar"}
                 </button>
             </div>
         </Form>
