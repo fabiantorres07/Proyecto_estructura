@@ -305,10 +305,16 @@ class ParameterChangeAction:
     """
 
     def __init__(self, parameter_name: str, old_value: float,
-                 old_references: dict[int, int | None] = None):
+                 old_references: dict[int, int | None] = None,
+                 old_values: Optional[dict[str, float]] = None):
         self.parameter_name = parameter_name
         self.old_value = old_value
         self.old_references = old_references
+        # Todos los parámetros que cambió UNA llamada a change_parameters,
+        # con su valor viejo ({"W": 48.0, "R": 40.0}). Un cambio de varios
+        # parámetros a la vez es UNA sola acción: se deshace con un solo
+        # "deshacer". parameter_name queda con los nombres unidos ("W,R").
+        self.old_values = old_values or {parameter_name: old_value}
 
 class ClockAdvanceAction:
     """Guarda el valor anterior del reloj de simulación antes de avanzarlo, para poder retrocederlo al deshacer."""

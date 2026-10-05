@@ -215,11 +215,13 @@ def update_next_report(
 def process_next_report(scenario: Scenario = Depends(get_scenario)):
     try:
         result = scenario.process_next_report()
-        report = result["report"]
         return {
             "case": result["case"],
             "event_id": result["event_id"],
-            "revision_num": report.revision_num,
+            "revision_num": result["revision_num"],
+            "station_id": result["station_id"],
+            "rotations": result["rotations"],
+            "rotation_delta": result["rotation_delta"],
         }
     except ValueError as error:
         _raise_http(error)

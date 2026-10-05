@@ -125,7 +125,24 @@ class ReportReviewResponse(BaseModel):
     current_event: ReportReviewEvent | None
     
     
+class ReportStepRotation(BaseModel):
+    """One AVL rebalancing case caused by a queue step."""
+
+    case: str               # LL, RR, LR or RL
+    event_id: int           # node that was unbalanced
+    balance_factor: int     # its factor before rotating
+    rotations: list[str]    # elementary rotations, in order ("left"/"right")
+
+
 class ReportProcessedResponse(BaseModel):
+    """Result of one queue step (section 8): station, event, revision,
+    decision and the rotations it caused. rotation_delta is how much the
+    step added to each rotation metric (a double case counts 1 case and 2
+    elementary rotations). Empty when the step did not touch the trees."""
+
     case: str
     event_id: int
     revision_num: int
+    station_id: str
+    rotations: list[ReportStepRotation] = []
+    rotation_delta: dict[str, int] = {}

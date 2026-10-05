@@ -119,6 +119,9 @@ class Scenario:
     def _tree_checkpoint(self) -> dict:
         """AUXILIAR: foto de la forma del AVL y del BST y de las métricas de
         rotación, tomada ANTES de modificar los árboles."""
+        # Abre el diario de rotaciones del AVL: desde aquí hasta
+        # _close_tree_checkpoint se anota cada caso atendido.
+        self.avl_tree.rotation_journal = []
         return {
             "avl": self.avl_tree.snapshot_topology(),
             "bst": self.bst_tree.snapshot_topology(),
@@ -134,6 +137,11 @@ class Scenario:
         checkpoint["rotation_delta"] = {
             k: self.metrics.get(k, 0) - before[k] for k in ROTATION_METRIC_KEYS
         }
+        # Lista de los casos atendidos en TODA la operación (sección 8: el
+        # paso de la cola muestra sus rotaciones; sección 14: el registro de
+        # la acción explica cómo se obtuvieron sus métricas).
+        checkpoint["rotations"] = self.avl_tree.rotation_journal or []
+        self.avl_tree.rotation_journal = None
         return checkpoint
 
     def _restore_tree_checkpoint(self, checkpoint: dict, event_ids=()) -> None:
@@ -253,13 +261,10 @@ class Scenario:
         can be undone. For L and T there is no recalculation and no
         old_references.
 
-        W and R together. If changes = {"W": 24, "R": 50} and both change:
-        W is applied first, references are recalculated, action is pushed
-        with old_refs (before W). Then R, references are recalculated again,
-        action is pushed with old_refs (which already reflects the W change).
-        When undoing, R is reverted first (going back to old R and restoring
-        the references from after W), then W.
-        It works, even though it recalculates twice.
+        Several parameters in one call (for example {"W": 24, "R": 50}) are
+        ONE action: one undo reverts all of them. The references are
+        snapshotted once (before any change) and recalculated once (after
+        all of them), only if W or R changed.
         """
         valid_names = {"L", "W", "R", "T"}
 
@@ -278,38 +283,36 @@ class Scenario:
             if name in changes and changes[name] <= 0:
                 raise ValueError(f"{name} must be a positive number")
 
-        # 3. Apply only those that truly change.
-        changed = {}
+        # 3. Keep only those that truly change. Nothing changed -> no action.
+        changed = {name: value for name, value in changes.items()
+                   if getattr(self, name) != value}
+        if not changed:
+            return {}
+        old_values = {name: getattr(self, name) for name in changed}
 
-        for name, new_value in changes.items():
-            old_value = getattr(self, name)
-            if old_value == new_value:
-                continue
+        # 4. Snapshot of references BEFORE touching anything, only if W or R
+        # changes (they redefine who is a candidate of whom).
+        affects_references = "W" in changed or "R" in changed
+        old_refs = None
+        if affects_references:
+            old_refs = {
+                event.event_id: event.reference_id
+                for event in self._all_active_and_archived_events()
+            }
 
-            # Snapshot of references before touching the parameter, only if
-            # applicable.
-            old_refs = None
-            if name in ("W", "R"):
-                old_refs = {
-                    event.event_id: event.reference_id
-                    for event in self._all_active_and_archived_events()
-                }
-
-            # Apply the change.
+        # 5. Apply all the changes, then recalculate references once.
+        for name, new_value in changed.items():
             setattr(self, name, new_value)
+        if affects_references:
+            for event in self._all_active_and_archived_events():
+                self._recalculate_reference(event)
 
-            # Recalculate all references if W or R changed.
-            if name in ("W", "R"):
-                for event in self._all_active_and_archived_events():
-                    self._recalculate_reference(event)
-
-            # Push the action with the old value and (if applicable) the
-            # previous snapshot.
-            self.undo_stack.push(
-                ParameterChangeAction(name, old_value, old_refs)
-            )
-            changed[name] = new_value
-
+        # 6. ONE action for the whole change.
+        names = ",".join(changed)
+        first = next(iter(changed))
+        self.undo_stack.push(ParameterChangeAction(
+            names, old_values[first], old_refs, old_values=old_values,
+        ))
         return changed
     """==============================================="""
     """================ZONE METHODS==================="""
@@ -806,10 +809,17 @@ class Scenario:
         ))
 
         # 6. Return info about the step, so the frontend can show what
-        # happened.
+        # happened. Section 8: station, event, revision, decision and
+        # rotations. The rotations come from the inner operation (create,
+        # correct or reactivate); the other cases do not touch the trees.
+        checkpoint = getattr(inner_action, "tree_checkpoint", None) or {}
         return {
             "case": case,
             "event_id": event_id,
+            "revision_num": report.revision_num,
+            "station_id": report.station.station_id,
+            "rotations": list(checkpoint.get("rotations", [])),
+            "rotation_delta": dict(checkpoint.get("rotation_delta", {})),
             "report": report,
         }
     
@@ -834,6 +844,14 @@ class Scenario:
 
         if self._id_exists(event_id):
             raise ValueError(f"El identificador {event_id} ya existe")
+
+        # Sección 3: ningún evento puede ser posterior al reloj de simulación.
+        # Se valida aquí (y no solo en el router o al encolar) para que
+        # ningún camino pueda crear un evento "del futuro".
+        if self._as_utc(occurred_at) > self.simulation_clock:
+            raise ValueError(
+                f"La fecha del evento {event_id} es posterior al reloj de simulación"
+            )
 
         is_populated = self.epicenter_in_populated_zone(x, y)
 
@@ -910,12 +928,25 @@ class Scenario:
                 "balance_factor": node.balance_factor,
                 "associations": self._build_associations(event_id),
             }
-        # Archived
+        # Archived: keeps its identity, data and associations (section 6),
+        # so its data and associations are returned too. It has no node in
+        # the AVL, so depth, height and balance factor are None.
         if event_id in self.archived_history:
+            event = self.archived_history[event_id]
             return {
                 "status": "archived",
                 "event_id": event_id,
-                "event": None,
+                "event": event,
+                "revision": event.revision,
+                "stations": event.stations,
+                "is_in_populated_zone": event.is_in_populated_zone,
+                "priority": event.priority,
+                "key": event.key,
+                "attention_status": event.attention_status,
+                "depth": None,
+                "height": None,
+                "balance_factor": None,
+                "associations": self._build_associations(event_id),
             }
 
         # Eliminated
@@ -1092,6 +1123,11 @@ class Scenario:
                 raise KeyError(f"No existe un evento con id {event_id}")
 
             event = self.event_index[event_id].event
+
+            # Already reviewed: nothing changes, so no action is pushed (the
+            # user would otherwise have to undo a step that did nothing).
+            if event.attention_status == AttentionStatus.REVIEWED:
+                return event
 
             # 2. Snapshot of the old value, before changing it. It is the only
             # thing that needs to be saved to be able to undo.
@@ -1614,6 +1650,23 @@ class Scenario:
                 "rotation_delta": {},
             }
 
+        # Section 10: the archived branch is the one chosen by the
+        # tie-break (most nodes, then deepest root, then largest root id).
+        # If the tree changed since the preview and another branch wins now,
+        # do not archive: the user must confirm the new preview.
+        current_winner = max(eligible, key=lambda e: (e["size"], e["depth"], e["root_id"]))
+        if current_winner["root_id"] != winner_root_id:
+            return {
+                "archived": False,
+                "reason": (
+                    f"Subtree with root id {winner_root_id} is eligible but is not the "
+                    f"winning branch anymore (now it is {current_winner['root_id']}); "
+                    f"request a new preview"
+                ),
+                "rotations": [],
+                "rotation_delta": {},
+            }
+
         winner = matches[0]
         node = winner["root"]
 
@@ -1932,9 +1985,11 @@ class Scenario:
         return {"undone": "attention_change", "event_id": action.event_id}
 
     def _undo_parameter_change(self, action: ParameterChangeAction) -> dict:
-        """Restaura el valor viejo del parámetro. Si era W o R, también
-        restaura las referencias que el cambio había recalculado."""
-        setattr(self, action.parameter_name, action.old_value)
+        """Restaura el valor viejo de cada parámetro que cambió la acción.
+        Si alguno era W o R, también restaura las referencias que el cambio
+        había recalculado."""
+        for name, old_value in action.old_values.items():
+            setattr(self, name, old_value)
 
         if action.old_references is not None:
             for event_id, old_ref in action.old_references.items():

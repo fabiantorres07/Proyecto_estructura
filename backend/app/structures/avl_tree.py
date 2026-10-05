@@ -65,6 +65,11 @@ class AVLTree:
             self.metrics.setdefault(metric_key, 0)
         # Rotaciones de la última operación pública (insert, recover_balance...).
         self.last_rotations = []
+        # Diario de rotaciones de una operación COMPUESTA de Scenario (por
+        # ejemplo una corrección = delete + insert, y cada una reinicia
+        # last_rotations). Scenario lo abre con [] antes de la operación y
+        # lo cierra con None después; mientras es None no se anota nada.
+        self.rotation_journal = None
 
     # ==================================================================
     # Utilidades básicas
@@ -206,12 +211,15 @@ class AVLTree:
             return node
 
         self.metrics[case] += 1
-        self.last_rotations.append({
+        entry = {
             "case": case,                 # LL, RR, LR o RL
             "event_id": event_id,         # evento del nodo que estaba desbalanceado
             "balance_factor": balance,    # factor que tenía antes de rotar
             "rotations": rotations,       # giros elementales aplicados, en orden
-        })
+        }
+        self.last_rotations.append(entry)
+        if self.rotation_journal is not None:
+            self.rotation_journal.append(entry)
         return new_root
 
     def last_rotation_delta(self):

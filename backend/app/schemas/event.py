@@ -22,6 +22,9 @@ class EventResponse(BaseModel):
     attention_status: Literal["pending", "reviewed"]
     is_in_populated_zone: bool
     priority: int
+    # Only GET /events/{id} fills it ("active" or "archived"); the other
+    # endpoints leave it as None.
+    status: Literal["active", "archived"] | None = None
 
 
 class EventCorrection(BaseModel):

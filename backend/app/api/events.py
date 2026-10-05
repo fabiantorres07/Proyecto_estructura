@@ -288,12 +288,14 @@ def get_event(
     except KeyError as error:
         _raise_http(error)
 
-    if result["status"] != "active":
+    # Active and archived events keep their data (section 6), so both are
+    # returned, with their status. An eliminated id only keeps the id.
+    if result["status"] == "eliminated":
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Event {event_id} is not active",
+            detail=f"Event {event_id} was eliminated",
         )
-    return _event_response(result["event"])
+    return {**_event_response(result["event"]), "status": result["status"]}
 
 
 @router.patch("/{event_id}", response_model=EventResponse)
