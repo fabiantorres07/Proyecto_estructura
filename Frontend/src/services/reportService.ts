@@ -3,7 +3,7 @@ import { Report } from "../models/Report/Report";
 import { ReportFormValues } from "../models/Report/ReportFormValues";
 import { ReportReviewResponse } from "../models/Report/ReportReviewResponse";
 import { ReportProcessedResponse } from "../models/Report/ReportProcessedResponse";
-import { notifyScenarioStateChanged } from "./undoService";
+import { notifyScenarioStateChanged } from "../utils/utils";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/reports`;
 

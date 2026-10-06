@@ -1,7 +1,7 @@
 import axios from "axios";
 import { VersionRestoreSummary } from "../models/Version/VersionRestoreSummary";
 import { VersionSaved, VersionSummary } from "../models/Version/VersionSummary";
-import { notifyScenarioStateChanged } from "./undoService";
+import { notifyScenarioStateChanged } from "../utils/utils";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/versions`;
 

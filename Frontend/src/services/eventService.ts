@@ -9,7 +9,7 @@ import { EventTreesResponse } from "../models/Event/EventTreesResponse";
 import { BranchArchivePreview } from "../models/Event/BranchArchivePreview";
 import { BranchArchiveResult } from "../models/Event/BranchArchiveResult";
 import { TreeComparisonResponse } from "../models/Event/TreeComparisonResponse";
-import { notifyScenarioStateChanged } from "./undoService";
+import { notifyScenarioStateChanged } from "../utils/utils";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/events`;
 

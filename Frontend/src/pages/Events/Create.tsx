@@ -79,10 +79,10 @@ const CreateEvent = () => {
                 handleAction={handleCreateEvent}
                 mode={1} // 1 stands for creation
                 stations= {stations}
+                batchMode={false}
             />
         </div>
     );
 };
 
 export default CreateEvent;
-

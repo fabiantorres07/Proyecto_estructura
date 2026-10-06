@@ -1,5 +1,14 @@
 import axios from "axios";
 
+export const SCENARIO_STATE_CHANGED_EVENT = "sismolab:scenario-state-changed";
+export const SCENARIO_UNDONE_EVENT = SCENARIO_STATE_CHANGED_EVENT;
+
+export const notifyScenarioStateChanged = () => {
+    if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event(SCENARIO_STATE_CHANGED_EVENT));
+    }
+};
+
 export const getApiErrorMessage = (error: unknown, fallback: string) => {
     if (axios.isAxiosError(error)) {
         const responseData = error.response?.data;

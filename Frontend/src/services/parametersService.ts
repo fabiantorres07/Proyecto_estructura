@@ -1,6 +1,6 @@
 import axios from "axios";
 import { GlobalParameters } from "../models/Parameters/GlobalParameters";
-import { notifyScenarioStateChanged } from "./undoService";
+import { notifyScenarioStateChanged } from "../utils/utils";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/parameters`;
 

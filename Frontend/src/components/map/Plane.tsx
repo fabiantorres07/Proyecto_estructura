@@ -247,7 +247,7 @@ function CartesianPlane({
                   <Label x={x + 10} y={y - 28}>
                     <Tag fill="black" cornerRadius={5} />
                     <Text
-                      text={String(mapEvent.event_id)}
+                      text={`SIS-${mapEvent.event_id}\nMagnitud: ${mapEvent.magnitude?.toFixed(1) ?? "No disponible"}\nPrioridad: ${mapEvent.priority ?? "No disponible"}`}
                       fill="white"
                       padding={8}
                       fontSize={14}

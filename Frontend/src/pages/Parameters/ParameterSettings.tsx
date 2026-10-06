@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import toast from "react-hot-toast";
+import Swal from "sweetalert2";
 import { GlobalParameters } from "../../models/Parameters/GlobalParameters";
 import { parametersService } from "../../services/parametersService";
 import { SCENARIO_STATE_CHANGED_EVENT } from "../../services/undoService";
@@ -27,7 +27,13 @@ const ParameterSettings = () => {
                 if (active) setParameters(data);
             })
             .catch(() => {
-                if (active) toast.error("Could not load parameters from the backend.");
+                if (active) {
+                    void Swal.fire({
+                        title: "Error",
+                        text: "Could not load parameters from the backend.",
+                        icon: "error",
+                    });
+                }
             })
             .finally(() => {
                 if (active) setLoading(false);
@@ -49,7 +55,11 @@ const ParameterSettings = () => {
         event.preventDefault();
         if (!parameters) return;
         if (!Number.isInteger(parameters.L)) {
-            toast.error("L must be a whole number.");
+            await Swal.fire({
+                title: "Invalid value",
+                text: "L must be a whole number.",
+                icon: "warning",
+            });
             return;
         }
 
@@ -57,9 +67,17 @@ const ParameterSettings = () => {
         try {
             const updated = await parametersService.updateParameters(parameters);
             setParameters(updated);
-            toast.success("Parameters updated.");
+            await Swal.fire({
+                title: "Saved",
+                text: "Parameters updated.",
+                icon: "success",
+            });
         } catch {
-            toast.error("Could not update parameters. Check the values and backend connection.");
+            await Swal.fire({
+                title: "Error",
+                text: "Could not update parameters. Check the values and backend connection.",
+                icon: "error",
+            });
         } finally {
             setSaving(false);
         }

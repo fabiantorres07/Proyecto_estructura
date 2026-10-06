@@ -2,7 +2,7 @@ import axios from "axios";
 import { BalanceRecovery } from "../models/Mode/BalanceRecovery";
 import { Mode } from "../models/Mode/Mode";
 import { StructureAudit } from "../models/Mode/StructureAudit";
-import { notifyScenarioStateChanged } from "./undoService";
+import { notifyScenarioStateChanged } from "../utils/utils";
 
 const API_URL = `${(import.meta as ImportMeta & { env: { VITE_API_URL?: string } }).env.VITE_API_URL ?? ""}/mode`;
 

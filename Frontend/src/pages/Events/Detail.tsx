@@ -171,10 +171,12 @@ const EventDetail = () => {
     });
     const associatedEventIds = Array.from(associatedEventsById.keys());
     const mapEvents: EventMapPoint[] = event
-        ? [event, ...Array.from(associatedEventsById.values())].map(({ event_id, x, y }) => ({
+        ? [event, ...Array.from(associatedEventsById.values())].map(({ event_id, x, y, magnitude, priority }) => ({
             event_id,
             x,
             y,
+            magnitude,
+            priority,
         }))
         : [];
     const highlightedStationIds = Array.from(new Set([

@@ -26,7 +26,13 @@ const AppMap = () => {
         if (!active) return;
         setStations(loadedStations);
         setZones(loadedZones);
-        setEvents(loadedEvents.map(({ event_id, x, y }) => ({ event_id, x, y })));
+        setEvents(loadedEvents.map(({ event_id, x, y, magnitude, priority }) => ({
+          event_id,
+          x,
+          y,
+          magnitude,
+          priority,
+        })));
       } catch (error) {
         if (!active) return;
         Swal.fire({

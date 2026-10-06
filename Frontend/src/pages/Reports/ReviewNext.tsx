@@ -150,7 +150,13 @@ const ReportReviewNext = () => {
     const report = review?.report;
     const currentEvent = review?.current_event;
     const eventMarker: EventMapPoint[] = report
-        ? [{ event_id: report.event_id, x: report.x, y: report.y }]
+        ? [{
+            event_id: report.event_id,
+            x: report.x,
+            y: report.y,
+            magnitude: report.magnitude,
+            priority: currentEvent?.priority,
+        }]
         : [];
     const reportingStationIds = Array.from(new Set([
         ...(currentEvent?.stations ?? []),
