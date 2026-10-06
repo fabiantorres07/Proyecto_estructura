@@ -3,12 +3,12 @@ from app.domain.station import Station
 
 class Event:
 
-    """CLASE EVENT"""
-    """Representa un terremoto: sus datos físicos y nada más.
-    Los datos: id, magnitud, profundidad, epicentro (x, y), fecha y hora.
-    La revisión vigente y las estaciones que han reportado.
-    Si está en zona poblada. Event no conoce las zonas, así que quien lo crea (Scenario) le dice el valor.
-    El estado de atención. Siempre empieza en pendiente."""
+    """EVENT CLASS"""
+    """Represents an earthquake: its physical data and nothing more.
+    The data: id, magnitude, depth, epicenter (x, y), date and time.
+    The current revision and reporting stations.
+    Whether it is in a populated zone. Event does not know about zones, so whoever creates it (Scenario) tells it the value.
+    Attention status. Always starts as pending."""
 
     def __init__(self,event_id, magnitude, depth, x, y, occurred_at,  revision, stations : set["Station"], is_in_populated_zone):
 
@@ -16,23 +16,23 @@ class Event:
         self.magnitude = magnitude
         self.depth = depth
 
-        # Con estos datos se representa el epicentro
+        # These data represent the epicenter
         self.x = x
         self.y = y
 
         self.occurred_at = occurred_at
 
-        # Revision vigente
+        # Current revision
         self.revision = revision
 
-        # Estaciones con reportes acpetados
+        # Stations with accepted reports
         self.stations = stations
 
         self.attention_status = AttentionStatus.PENDING
 
         self.is_in_populated_zone = is_in_populated_zone
 
-        #SE NECESITA PARA CALCULAR EN SCENARIO LAS ASOCIACIONES (es un atributo de estado del sistema, solo se pone aqui)
+        # NEEDED TO CALCULATE ASSOCIATIONS IN SCENARIO (system state attribute, only stored here)
         self.reference_id = None
 
     @property
@@ -59,19 +59,19 @@ class Event:
 
     def apply_correction(self, magnitude=None, depth=None, x=None, y=None,
                         occurred_at=None, revision=None, is_in_populated_zone=None):
-        """Aplica una corrección sobre el evento.
+        """Applies a correction to the event.
 
-        - Cambia los campos que llegan (los que quedan en None no se tocan).
-        - `occurred_at` NO está en la clave K = (P, M, I), pero SÍ afecta
-        las asociaciones (sección 7): W horas, orden temporal de las
-        referencias. Un cambio de fecha puede mover qué eventos son
-        candidatos entre sí sin cambiar la clave.
-        - `revision`: si llega, se usa ese valor (corrección desde un
-        reporte, sección 6: "sustituir los datos vigentes" con la
-        revisión del reporte). Si no llega, se incrementa en 1
-        (corrección manual, sección 6: "r + 1").
-        - Devuelve (old_key, new_key) para que Scenario sepa si hay que
-        reubicar en los árboles.
+        - Changes incoming fields (fields left as None are not touched).
+        - `occurred_at` is NOT in the key K = (P, M, I), but it DOES affect
+        associations (section 7): W hours, temporal order of
+        references. A date change can change which events are
+        candidates for each other without changing the key.
+        - `revision`: if provided, that value is used (correction from a
+        report, section 6: "substitute the current data" with the
+        report's revision). If not provided, it is incremented by 1
+        (manual correction, section 6: "r + 1").
+        - Returns (old_key, new_key) so Scenario knows if trees must be
+        reorganized.
         """
         if x is not None or y is not None:
             if is_in_populated_zone is None:
@@ -107,7 +107,7 @@ class Event:
     def mark_as_reviewed(self):
         self.attention_status = AttentionStatus.REVIEWED
 
-# El siguiente enum se usa para definir el estado de atencion del evento
+# The following enum is used to define the attention status of the event
 class AttentionStatus(Enum):
     PENDING = "pending"
     REVIEWED = "reviewed"

@@ -8,35 +8,35 @@ from typing import Optional
 from app.domain.report import Report
 
 
-"CLASE ACTION"
-"""Cada tipo de operación se tiene que deshacer por separado. Son diez: crear, corregir, eliminar, archivar rama, cambiar parámetros, avanzar el reloj, cambiar el estado de atención, cargar un escenario, recuperación global y cada paso de la cola."""
+"ACTION CLASS"
+"""Each type of operation must be undone separately. There are ten: create, correct, delete, archive branch, change parameters, advance clock, change attention status, load scenario, global recovery, and each queue step."""
 
-"""Cada vez que el usuario hace algo (crear un evento, corregirlo, etc.), el sistema guarda en la pila una nota de lo que se hizo. 
-Si el usuario pulsa deshacer, se saca la última nota y se hace lo contrario.
-Su rol es solo guardar datos, nada más. Estas clases no hacen nada por sí solas. Scenario es quien crea las notas y quien las usa para deshacer."""
+"""Every time the user does something (creates an event, corrects it, etc.), the system saves a note on the stack of what was done. 
+If the user clicks undo, the last note is popped and the opposite is done.
+Their role is only to store data, nothing else. These classes do nothing on their own. Scenario is what creates the notes and uses them to undo."""
 
-"""CreationAction: solo el id del evento, para poder quitarlo.
+"""CreationAction: only the event id, to be able to remove it.
 
-CorrectionAction: Acción que representa una corrección manual de un evento activo.
+CorrectionAction: Action representing a manual correction of an active event.
 
-DeletionAction: el evento completo, porque al borrarlo ya no existe en ningún otro lado.
+DeletionAction: the complete event, because once deleted it no longer exists anywhere else.
 
-MassArchiveAction: la rama archivada y de dónde colgaba, para volver a pegarla.
+MassArchiveAction: the archived branch and where it hung from, to be able to reattach it.
 
-ParameterChangeAction: qué parámetro cambió (L, W, R o T) y su valor viejo.
+ParameterChangeAction: which parameter changed (L, W, R, or T) and its old value.
 
-ClockAdvanceAction: la hora vieja del reloj.
+ClockAdvanceAction: the old clock time.
 
-AttentionChangeAction: el estado viejo (pendiente o revisado).
+AttentionChangeAction: the old status (pending or reviewed).
 
-LoadAction: una copia de todo el escenario anterior. La regla general es guardar lo mínimo, pero esta es la excepción, porque cargar un archivo reemplaza todo.
+LoadAction: a copy of the entire previous scenario. The general rule is to store the minimum, but this is the exception because loading a file replaces everything.
 
-GlobalRecoveryAction: una "foto" de la forma del árbol antes de repararlo, para dejarlo idéntico al deshacer.
+GlobalRecoveryAction: a snapshot of the tree shape before repairing it, to restore it identically on undo.
 
-QueueStepAction: el reporte procesado, su lugar en la cola y la acción interna (crear o corregir) que produjo."""
+QueueStepAction: the processed report, its queue position, and the inner action (create or correct) it produced."""
 
-"""Cada operación necesita guardar cosas distintas para poder deshacerse. Una corrección guarda valores viejos, 
-un borrado guarda el evento completo y el reloj guarda una hora."""
+"""Each operation needs to store different things to be able to undo. A correction stores old values, 
+a deletion stores the complete event, and the clock stores a timestamp."""
 
 
 
@@ -44,112 +44,112 @@ un borrado guarda el evento completo y el reloj guarda una hora."""
 
 
 class CreationAction:
-    """Acción que representa la creación manual de un evento.
+    """Action representing the manual creation of an event.
 
-    Se apila en Scenario.undo_stack después de que create_event termine
-    correctamente. Al deshacer, Scenario debe poder revertir TODO lo que
-    la creación cambió, no solo el evento nuevo.
+    Pushed to Scenario.undo_stack after create_event completes
+    successfully. On undo, Scenario must be able to revert EVERYTHING that
+    creation changed, not just the new event.
 
-    La versión anterior solo guardaba `event_id`. Eso alcanzaba para
-    retirar el evento nuevo del AVL, del BST y de event_index, pero NO
-    alcanzaba para restaurar las referencias de otros eventos. Al crear
-    B, B puede volverse candidato de eventos X que ya existían (reportes
-    tardíos con mayor magnitud), y esos X cambian su referencia. Si al
-    deshacer solo quitáramos B, esos X quedarían apuntando a un evento
-    que ya no existe: se rompe el invariante de la sección 7.
+    The previous version only stored `event_id`. That was enough to
+    remove the new event from the AVL, BST, and event_index, but NOT
+    enough to restore references of other events. When creating
+    B, B can become a candidate for existing events X (late
+    reports with higher magnitude), and those X change their reference. If on
+    undo we only removed B, those X would remain pointing to an event
+    that no longer exists: breaking the section 7 invariant.
 
-    Scenario.undo() hace pop de la pila y decide con isinstance()
-    qué revertir. Para una CreationAction necesita saber:
-      - qué evento retirar (event_id), y
-      - a qué referencia volver para cada evento afectado
+    Scenario.undo() pops from the stack and decides with isinstance()
+    what to revert. For a CreationAction it needs to know:
+      - which event to remove (event_id), and
+      - which reference to restore for each affected event
         (old_references).
 
-    old_references es un dict {event_id: reference_id_anterior}. Incluye
-    siempre al evento nuevo (que antes no existía -> None) y a cualquier
-    otro evento cuya referencia haya cambiado por culpa de esta creación.
+    old_references is a dict {event_id: previous_reference_id}. Always
+    includes the new event (which previously did not exist -> None) and any
+    other event whose reference changed due to this creation.
     """
 
     def __init__(self, event_id: int, old_references: dict[int, int | None],
                  tree_checkpoint: Optional[dict] = None):
         self.event_id = event_id
         self.old_references = old_references
-        # Foto de la forma del AVL y del BST tomada ANTES de tocar los
-        # árboles, más lo que la operación sumó a las métricas de rotación
-        # (ver Scenario._tree_checkpoint). Al deshacer se restaura tal cual:
-        # misma topología y mismas métricas (sección 13).
+        # Snapshot of the AVL and BST shape taken BEFORE touching the
+        # trees, plus what the operation added to rotation metrics
+        # (see Scenario._tree_checkpoint). On undo it is restored as-is:
+        # same topology and same metrics (section 13).
         self.tree_checkpoint = tree_checkpoint
 
 class CorrectionAction:
-    """Acción que representa una corrección manual de un evento activo.
+    """Action representing a manual correction of an active event.
 
-    Se apila en Scenario.undo_stack después de que correct_event termine
-    correctamente. Al deshacer, Scenario debe poder revertir TODO lo que
-    la corrección cambió, no solo los datos del evento.
+    Pushed to Scenario.undo_stack after correct_event completes
+    successfully. On undo, Scenario must be able to revert EVERYTHING that
+    the correction changed, not just the event data.
 
 
-    La primera versión de CorrectionAction solo guardaba el id del
-    evento. Eso era insuficiente por tres razones que aparecieron al
-    escribir correct_event:
+    The first version of CorrectionAction only stored the event id.
+    That was insufficient for three reasons that arose when
+    writing correct_event:
 
-    1) La corrección modifica varios campos del Event.
-       apply_correction() puede cambiar magnitud, profundidad, x, y,
-       is_in_populated_zone, revision y attention_status (vuelve a
-       PENDING). Para deshacer hay que restaurar TODOS esos valores.
-       Con solo el id no se puede: no hay de dónde sacar los valores
-       viejos. Por eso se guardan campo por campo.
+    1) The correction modifies several fields of Event.
+       apply_correction() can change magnitude, depth, x, y,
+       is_in_populated_zone, revision, and attention_status (returns to
+       PENDING). To undo, ALL those values must be restored.
+       With only the id it is impossible: there is nowhere to get the old
+       values from. That is why they are saved field by field.
 
-    2) La corrección puede cambiar la clave K del evento.
-       Si cambia magnitud, profundidad o zona poblada, la prioridad
-       cambia, y con ella la clave K = (P, M, I). Eso obliga a retirar
-       el nodo del AVL y del BST y reinsertarlo. Al deshacer hay que
-       hacer lo mismo pero al revés: retirar con la clave ACTUAL y
-       reinsertar con la clave VIEJA.
-       OJO: la clave vieja NO se guarda en la acción. Se reconstruye
-       sola al restaurar old_magnitude, old_depth y
-       old_is_in_populated_zone, porque Event.priority y Event.key son
-       @property: en cuanto cambias los atributos, la clave se recalcula.
-       Guardarla sería duplicar información.
+    2) The correction can change the key K of the event.
+       If magnitude, depth, or populated zone changes, priority
+       changes, and with it key K = (P, M, I). That requires removing
+       the node from AVL and BST and reinserting it. On undo we must
+       do the same in reverse: remove with CURRENT key and
+       reinsert with OLD key.
+       NOTE: the old key is NOT stored in the action. It is reconstructed
+       on its own when restoring old_magnitude, old_depth, and
+       old_is_in_populated_zone, because Event.priority and Event.key are
+       @property: as soon as attributes change, the key is recalculated.
+       Storing it would duplicate information.
 
-    3) La corrección puede mover las asociaciones (sección 7).
-       Si sube la magnitud o cambia la fecha, B puede volverse candidato
-       de eventos que antes no lo tenían como referencia. Y si baja la
-       magnitud o se aleja del epicentro, B puede dejar de ser candidato
-       de eventos que sí lo tenían como referencia. Ambos grupos hay que
-       recalcularlos.
-       Para deshacer, hay que restaurar las referencias que tenían ANTES
-       de la corrección. Eso se guarda en old_references, con el mismo
-       patrón que usa CreationAction: un dict {event_id: reference_id}
-       con la foto previa de cada evento afectado.
+    3) The correction can change associations (section 7).
+       If magnitude increases or the date changes, B can become a candidate
+       for events that previously did not have it as a reference. And if magnitude
+       decreases or it moves further from the epicenter, B may cease to be a candidate
+       for events that did have it as a reference. Both groups must be
+       recalculated.
+       To undo, references they had BEFORE the correction must be restored.
+       That is stored in old_references, following the same
+       pattern used by CreationAction: a dict {event_id: reference_id}
+       with the previous snapshot of each affected event.
 
     ──────────────────────────────────────────────────────────────
-    ¿Por qué lo necesita Scenario?
+    Why does Scenario need this?
     ──────────────────────────────────────────────────────────────
 
-    Scenario.undo() hace pop de la pila y decide con isinstance() qué
-    revertir. Para una CorrectionAction necesita saber:
+    Scenario.undo() pops from the stack and decides with isinstance() what
+    to revert. For a CorrectionAction it needs to know:
 
-      - qué evento corregir (event_id),
-      - a qué valores volver (old_magnitude, old_depth, old_x, old_y,
-        old_is_in_populated_zone, old_revision, old_attention_status), y
-      - a qué referencias volver para cada evento afectado
+      - which event to correct (event_id),
+      - which values to restore (old_magnitude, old_depth, old_x, old_y,
+        old_is_in_populated_zone, old_revision, old_attention_status), and
+      - which references to restore for each affected event
         (old_references).
 
-    Lo que NO se guarda, y por qué:
-      - old_key: se reconstruye sola al restaurar los valores viejos.
-      - old_stations: apply_correction() no toca las estaciones, así
-        que no cambian y no hay nada que restaurar.
-      - una copia completa del Event: no hace falta, los campos que sí
-        cambian son inmutables (float, bool, int, enum) y basta con
-        guardarlos sueltos. No hay listas ni sets que se puedan mutar
-        por accidente.
+    What is NOT stored, and why:
+      - old_key: reconstructed on its own when restoring old values.
+      - old_stations: apply_correction() does not touch stations, so
+        they do not change and there is nothing to restore.
+      - a complete copy of Event: not needed, the fields that do
+        change are immutable (float, bool, int, enum) and storing them
+        individually suffices. There are no lists or sets that can be mutated
+        accidentally.
 
     ──────────────────────────────────────────────────────────────
-    Resumen
+    Summary
     ──────────────────────────────────────────────────────────────
 
-    Guarda solo lo mínimo necesario para volver al estado exacto
-    anterior: los campos que apply_correction pudo haber tocado, y las
-    referencias previas de los eventos cuyas asociaciones cambiaron.
+    Stores only the minimum needed to return to the exact previous state:
+    fields that apply_correction could have touched, and previous
+    references of events whose associations changed.
     """
 
     def __init__(
@@ -177,35 +177,35 @@ class CorrectionAction:
         self.old_revision = old_revision
         self.old_attention_status = old_attention_status
         self.old_references = old_references
-        # Lo que esta corrección sumó a los contadores de la sección 14
-        # ({"corrections_accepted": 1}). Se resta al deshacer.
+        # What this correction added to the section 14 counters
+        # ({"corrections_accepted": 1}). Subtracted on undo.
         self.counter_delta = counter_delta or {}
-        # Foto de la forma del AVL y del BST tomada ANTES de tocar los
-        # árboles, más lo que la operación sumó a las métricas de rotación
-        # (ver Scenario._tree_checkpoint). Al deshacer se restaura tal cual:
-        # misma topología y mismas métricas (sección 13).
+        # Snapshot of the AVL and BST shape taken BEFORE touching the
+        # trees, plus what the operation added to rotation metrics
+        # (see Scenario._tree_checkpoint). On undo it is restored as-is:
+        # same topology and same metrics (section 13).
         self.tree_checkpoint = tree_checkpoint
 
 
 class ReactivationAction:
-    """Acción que representa la reactivación de un evento archivado por
-    un reporte con revisión mayor (sección 6).
+    """Action representing the reactivation of an archived event by
+    a report with a higher revision (section 6).
 
-    Se apila en Scenario.undo_stack dentro de archived_reactivation().
-    process_next_report la saca con pop() y la mete dentro del
-    QueueStepAction, igual que ya hace con CreationAction y
+    Pushed to Scenario.undo_stack inside archived_reactivation().
+    process_next_report pops it and places it inside
+    QueueStepAction, just as it already does with CreationAction and
     CorrectionAction.
 
-    Diferencias con CorrectionAction:
-    - Mismos campos old_* + old_references, pero el "antes" del evento
-      no es estar en el AVL: es estar en archived_history.
-    - Al deshacer, el evento NO se reubica dentro del árbol: sale del
-      AVL/BST/event_index y vuelve a archived_history (ver
-      _undo_reactivation en Scenario).
+    Differences from CorrectionAction:
+    - Same old_* fields + old_references, but the "before" state of the event
+      is not being in the AVL: it is being in archived_history.
+    - On undo, the event is NOT relocated within the tree: it leaves the
+      AVL/BST/event_index and returns to archived_history (see
+      _undo_reactivation in Scenario).
 
-    Por qué es clase aparte y no reutilizar CorrectionAction: el criterio
-    del proyecto nunca fue "qué datos guarda" sino "qué tiene que hacer
-    undo() con ellos", y ahí sí son distintos.
+    Why it is a separate class instead of reusing CorrectionAction: the project
+    criterion was never "what data it stores" but "what undo() has to do
+    with it", and there they are indeed different.
     """
 
     def __init__(
@@ -233,43 +233,43 @@ class ReactivationAction:
         self.old_revision = old_revision
         self.old_attention_status = old_attention_status
         self.old_references = old_references
-        # Lo que esta reactivación sumó a los contadores de la sección 14
-        # ({"corrections_accepted": 1}). Se resta al deshacer.
+        # What this reactivation added to section 14 counters
+        # ({"corrections_accepted": 1}). Subtracted on undo.
         self.counter_delta = counter_delta or {}
-        # Foto de la forma del AVL y del BST tomada ANTES de tocar los
-        # árboles, más lo que la operación sumó a las métricas de rotación
-        # (ver Scenario._tree_checkpoint). Al deshacer se restaura tal cual:
-        # misma topología y mismas métricas (sección 13).
+        # Snapshot of the AVL and BST shape taken BEFORE touching the
+        # trees, plus what the operation added to rotation metrics
+        # (see Scenario._tree_checkpoint). On undo it is restored as-is:
+        # same topology and same metrics (section 13).
         self.tree_checkpoint = tree_checkpoint
 
 
 class DeletionAction:
-    """Guarda el Event completo que fue eliminado, ya que una vez borrado
-    no queda en ninguna otra estructura; al deshacer se reinserta tal cual.
-    También guarda las referencias viejas de los eventos afectados por la
-    eliminación (los que tenían al eliminado como referencia), para poder
-    restaurarlas al deshacer."""
+    """Stores the complete Event that was deleted, since once deleted
+    it does not remain in any other structure; on undo it is reinserted as-is.
+    Also stores old references of events affected by the
+    deletion (those having the deleted event as reference), to be able
+    to restore them on undo."""
     def __init__(self, event: Event, old_references: dict[int, int | None],
                  tree_checkpoint: Optional[dict] = None):
         self.event = event
         self.old_references = old_references
-        # Foto de la forma del AVL y del BST tomada ANTES de tocar los
-        # árboles, más lo que la operación sumó a las métricas de rotación
-        # (ver Scenario._tree_checkpoint). Al deshacer se restaura tal cual:
-        # misma topología y mismas métricas (sección 13).
+        # Snapshot of the AVL and BST shape taken BEFORE touching the
+        # trees, plus what the operation added to rotation metrics
+        # (see Scenario._tree_checkpoint). On undo it is restored as-is:
+        # same topology and same metrics (section 13).
         self.tree_checkpoint = tree_checkpoint
 
 class MassArchiveAction:
-    """Guarda la raíz del subárbol que se archivó en bloque, su antiguo
-    padre y de qué lado colgaba, más la lista de ids afectados, para poder
-    reinjertar todo el subárbol en su posición original al deshacer.
+    """Stores the root of the subtree that was archived in bulk, its former
+    parent and which side it hung from, plus the list of affected ids, to be able
+    to reattach the entire subtree in its original position on undo.
 
-    rotation_delta: lo que sumó detach_subtree a las métricas de rotación.
-    Se resta al deshacer con avl_tree.revert_rotation_metrics(delta).
+    rotation_delta: what detach_subtree added to rotation metrics.
+    Subtracted on undo with avl_tree.revert_rotation_metrics(delta).
 
-    counter_delta: lo que sumó el archivo a los contadores de la sección 14
-    ({"mass_archives": 1, "archived_events": tamaño de la rama}). Se resta
-    al deshacer con Scenario._revert_counters(delta).
+    counter_delta: what archiving added to section 14 counters
+    ({"mass_archives": 1, "archived_events": branch size}). Subtracted
+    on undo with Scenario._revert_counters(delta).
     """
     def __init__(self, archived_root: AVLNode, former_parent: Optional[AVLNode],
                  was_left_child: Optional[bool], event_ids: list[int],
@@ -281,29 +281,29 @@ class MassArchiveAction:
         self.event_ids = event_ids
         self.rotation_delta = rotation_delta or {}
         self.counter_delta = counter_delta or {}
-        # Foto de la forma del AVL y del BST tomada ANTES de tocar los
-        # árboles, más lo que la operación sumó a las métricas de rotación
-        # (ver Scenario._tree_checkpoint). Al deshacer se restaura tal cual:
-        # misma topología y mismas métricas (sección 13).
+        # Snapshot of the AVL and BST shape taken BEFORE touching the
+        # trees, plus what the operation added to rotation metrics
+        # (see Scenario._tree_checkpoint). On undo it is restored as-is:
+        # same topology and same metrics (section 13).
         self.tree_checkpoint = tree_checkpoint
         
 class ParameterChangeAction:
-    """Guarda el nombre del parámetro global (L, W, R o T), su valor
-    anterior, y — cuando el parámetro afecta las asociaciones (W o R) —
-    la foto de las referencias de todos los eventos activos y archivados
-    antes de recalcularlas.
+    """Stores the name of the global parameter (L, W, R, or T), its previous
+    value, and — when the parameter affects associations (W or R) —
+    the snapshot of references of all active and archived events
+    before recalculating them.
 
-    ¿Por qué old_references?
-    Cambiar W o R redefine qué eventos son candidatos entre sí. No hay
-    filtro posible: cualquier evento puede ganar o perder candidatos.
-    Por eso, al cambiar W o R, Scenario recalcula la referencia de TODOS
-    los eventos activos y archivados. Para poder deshacer, hay que
-    guardar el reference_id que tenía cada uno antes del recálculo.
+    Why old_references?
+    Changing W or R redefines which events are candidates for each other. No
+    filter is possible: any event can gain or lose candidates.
+    Therefore, when changing W or R, Scenario recalculates the reference of ALL
+    active and archived events. To be able to undo, the reference_id each one had
+    before recalculation must be saved.
 
-    Para L y T no aplica: L solo afecta la marca de "acceso costoso"
-    (no toca referencias) y T solo afecta a futuras operaciones de
-    archivo (las ramas ya archivadas se quedan como están). En esos
-    casos old_references queda en None.
+    For L and T this does not apply: L only affects the "costly access" flag
+    (does not touch references) and T only affects future archive operations
+    (already archived branches remain as they are). In those
+    cases old_references remains None.
     """
 
     def __init__(self, parameter_name: str, old_value: float,
@@ -312,50 +312,50 @@ class ParameterChangeAction:
         self.parameter_name = parameter_name
         self.old_value = old_value
         self.old_references = old_references
-        # Todos los parámetros que cambió UNA llamada a change_parameters,
-        # con su valor viejo ({"W": 48.0, "R": 40.0}). Un cambio de varios
-        # parámetros a la vez es UNA sola acción: se deshace con un solo
-        # "deshacer". parameter_name queda con los nombres unidos ("W,R").
+        # All parameters changed by ONE call to change_parameters,
+        # with their old value ({"W": 48.0, "R": 40.0}). Changing multiple
+        # parameters at once is ONE single action: undone with a single
+        # "undo". parameter_name has the joined names ("W,R").
         self.old_values = old_values or {parameter_name: old_value}
 
 class ClockAdvanceAction:
-    """Guarda el valor anterior del reloj de simulación antes de avanzarlo, para poder retrocederlo al deshacer."""
+    """Stores the previous simulation clock value before advancing it, to be able to rewind it on undo."""
     def __init__(self, old_clock: datetime):
         self.old_clock = old_clock
 
-"""Guarda el estado de atención anterior de un evento antes de un cambio manual de atención, para poder restaurarlo."""
+"""Stores the previous attention status of an event before a manual attention change, to be able to restore it."""
 class AttentionChangeAction:
     def __init__(self, event_id: int, old_attention_status: AttentionStatus):
         self.event_id = event_id
         self.old_attention_status = old_attention_status
 
-"""Guarda el estado previo completo del escenario antes de cargar uno nuevo (por archivo o topología). Es una excepción a la regla de costo proporcional porque la acción misma reemplaza todo el estado."""
+"""Stores the full previous state of the scenario before loading a new one (by file or topology). It is an exception to the proportional cost rule because the action itself replaces the entire state."""
 class LoadAction:
     def __init__(self, previous_state):
         self.previous_state = previous_state
 
 class GlobalRecoveryAction:
-    """Guarda cómo estaba el AVL antes de una recuperación global, para
-    poder dejarlo exactamente igual al deshacer (sección 13).
+    """Stores the state of the AVL before a global recovery, to
+    be able to restore it identically on undo (section 13).
 
-    - topology_snapshot: copia de la forma del árbol tomada con
-      avl_tree.snapshot_topology() ANTES de recuperar. Guardar solo la raíz
-      anterior no basta: las rotaciones cambian los enlaces de esos mismos
-      nodos, así que la raíz vieja ya no describe la forma vieja.
-    - rotation_delta: lo que sumó la recuperación a las métricas de
-      rotación (avl_tree.last_rotation_delta() DESPUÉS de recuperar), para
-      restarlo al deshacer con avl_tree.revert_rotation_metrics(delta).
-    - previous_mode: modo en que estaba el escenario antes (normalmente
-      Mode.STRESS), por si la recuperación termina volviendo a modo normal.
-      Sin anotación de tipo a propósito: importar Mode desde scenario.py
-      crearía un import circular cuando Scenario importe estas acciones.
+    - topology_snapshot: copy of tree shape taken with
+      avl_tree.snapshot_topology() BEFORE recovering. Storing only the previous
+      root is not enough: rotations change the links of those same
+      nodes, so the old root no longer describes the old shape.
+    - rotation_delta: what recovery added to rotation
+      metrics (avl_tree.last_rotation_delta() AFTER recovering), to
+      subtract it on undo with avl_tree.revert_rotation_metrics(delta).
+    - previous_mode: mode the scenario was in before (normally
+      Mode.STRESS), in case recovery ends up returning to normal mode.
+      Without type annotation intentionally: importing Mode from scenario.py
+      would create a circular import when Scenario imports these actions.
 
-    Flujo esperado en Scenario:
+    Expected flow in Scenario:
         snapshot = self.avl_tree.snapshot_topology()
         self.avl_tree.recover_balance()
         action = GlobalRecoveryAction(snapshot, self.avl_tree.last_rotation_delta(), self.mode)
         self.undo_stack.push(action)
-    Al deshacer:
+    On undo:
         self.avl_tree.restore_topology(action.topology_snapshot)
         self.avl_tree.revert_rotation_metrics(action.rotation_delta)
         self.mode = action.previous_mode
@@ -365,7 +365,7 @@ class GlobalRecoveryAction:
         self.rotation_delta = rotation_delta
         self.previous_mode = previous_mode
 
-"""Guarda el reporte procesado y la posición que ocupaba en la cola, junto con la acción interna que generó ese paso (creación o corrección) y la estación confirmada si aplicó, para poder revertir el procesamiento de ese reporte y devolverlo a su posición en la cola."""
+"""Stores the processed report and its queue position, along with the inner action produced by that step (creation or correction) and the confirmed station if applicable, to be able to revert the processing of that report and return it to its position in the queue."""
 class QueueStepAction:
     def __init__(
         self,
@@ -379,9 +379,9 @@ class QueueStepAction:
         self.queue_position = queue_position
         self.inner_action = inner_action
         self.confirmed_station_id = confirmed_station_id
-        # Lo que sumó el PROPIO paso a los contadores de la sección 14
-        # (conflicto o reporte descartado). Una corrección o reactivación
-        # interna guarda su conteo en inner_action, no aquí.
+        # What the step ITSELF added to section 14 counters
+        # (conflict or discarded report). An inner correction or reactivation
+        # stores its count in inner_action, not here.
         self.counter_delta = counter_delta or {}
 
 

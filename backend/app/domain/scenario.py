@@ -22,22 +22,18 @@ from app.structures.avl_node import AVLNode
 from app.structures.bst_node import BSTNode
 from app.structures.bst_tree import BSTTree
 
-# Contadores de la sección 14 (además de los de rotación, que los crea
-# AVLTree). Viven en el mismo diccionario self.metrics, así que se exportan,
-# se cargan y se restauran con el resto del estado. Al deshacer, cada acción
-# resta lo que sumó (counter_delta), igual que rotation_delta.
-#   corrections_accepted: correcciones aplicadas (manuales, por reporte y
-#                         reactivaciones de archivados).
-#   reports_discarded:    reportes rechazados al procesar la cola por
-#                         antiguos (activo o archivado) o por id eliminado.
-#   conflicts:            reportes con igual revisión y datos distintos,
-#                         sobre un evento activo o archivado.
-#                         (Una confirmación, activa o archivada, no cuenta:
-#                         el reporte se acepta.)
-#   mass_archives:        archivos masivos ejecutados.
-#   archived_events:      eventos enviados al histórico por archivos masivos
-#                         (acumulado; los archivados actuales son
-#                         len(archived_history)).
+#Counters. They live in the same dictionary as self. metrics, so they get exported
+#They load and get reinstated with the same state.When undone, each action substracts
+#whatever they added (counter_delta), the same as rotation_delta.
+
+# corrections_accepted: corrections appliad (manual, from reports and reactivations of archived)
+# reports_discarded: reports that were denied when processing the queue for antiquity (active or archived) or because of a deleted id
+#                    reports with the same revision and disfferent data over an active or archived event.
+# conflicts: reports with the same revision and distinct data over an active or archived event. (a confirmation, active or archived)
+#            doesn't count: the report gets accepted)
+# mass_archives: massive executed archives
+# archived_events: events sent to the historic by massive archivations (it accumulates, the current amount of archived events is len(archiced_history))
+
 COUNTER_KEYS = ("corrections_accepted", "reports_discarded", "conflicts",
                 "mass_archives", "archived_events")
 
@@ -74,8 +70,8 @@ class Scenario:
         self.stations = stations if stations is not None else dict()
         self.event_index = event_index if event_index is not None else dict()
         self.metrics = metrics if metrics is not None else dict()
-        # Contadores de la sección 14 en 0 si no vienen (por ejemplo, al
-        # cargar un archivo guardado antes de que existieran).
+        # Section 14 counters set to 0 if not provided (for example, when
+        # loading a file saved before they existed).
         for counter_key in COUNTER_KEYS:
             self.metrics.setdefault(counter_key, 0)
 
@@ -99,30 +95,28 @@ class Scenario:
         return value.astimezone(timezone.utc)
 
     def _add_counters(self, delta: dict) -> None:
-        """AUXILIAR: suma `delta` a los contadores de la sección 14. Quien
-        lo llama guarda el mismo delta en su acción para poder restarlo."""
+        """HELPER: adds `delta` to section 14 counters. The caller
+        saves the same delta in its action to be able to subtract it."""
         for counter_key, amount in delta.items():
             self.metrics[counter_key] = self.metrics.get(counter_key, 0) + amount
 
-    # FOTO DE LOS ÁRBOLES PARA DESHACER (sección 13)
+    # SNAPSHOTS OF THE TREES TO UNDO
     #
-    # Deshacer debe recuperar el estado exacto, incluida la topología. Volver
-    # a insertar o eliminar al deshacer NO basta: las rotaciones pueden dejar
-    # el árbol con otra forma y sumarían métricas de más. Por eso cada
-    # operación que cambia los árboles (crear, corregir, reactivar, eliminar,
-    # archivar) toma una foto ANTES de tocarlos y la guarda en su acción, y
-    # deshacer pone esa foto de vuelta. Es el mismo mecanismo que ya usaba la
-    # recuperación global (GlobalRecoveryAction).
+    # Undo must recover the exact state, including the topology
+    # reinserting or deleting when undoing is not enough, because those actions may cause rotations
+    # that would give a different shape to the tree and add more metrics.
+    # Because of this, each operation that may change the tree's state (Create, edit, reactivate, delete or archive)
+    # takes a snapshot before doing any changes, saves it on its own action and when undone
+    # the snapshot gets reinstated. It's the same mechanism already used by GlobalRecoveryAction
     #
-    # Memoria: O(n) referencias por acción (5 por nodo del AVL y 3 por nodo
-    # del BST), sin copiar eventos ni crear nodos. Con ~100 eventos es poco,
-    # y a cambio deshacer es exacto y O(n).
+    # Memory: O(n) references by action (5 for the AVL node and 3 for the node of the BST)
+    # Without copying events or creating nodes. With 100 events is very little, and in exchange, undoing is exact and O(n).
 
     def _tree_checkpoint(self) -> dict:
-        """AUXILIAR: foto de la forma del AVL y del BST y de las métricas de
-        rotación, tomada ANTES de modificar los árboles."""
-        # Abre el diario de rotaciones del AVL: desde aquí hasta
-        # _close_tree_checkpoint se anota cada caso atendido.
+        """AUXILIAR: Snapshot of the current shape of the AVL, BST and rotation metrics.
+        It's taken before doing any changes"""
+        # Opens the journal of the AVL rotations: From here to _close_tree_checkpoint it
+        # writes each attended case
         self.avl_tree.rotation_journal = []
         return {
             "avl": self.avl_tree.snapshot_topology(),
@@ -131,26 +125,22 @@ class Scenario:
         }
 
     def _close_tree_checkpoint(self, checkpoint: dict) -> dict:
-        """AUXILIAR: completa la foto, DESPUÉS de modificar los árboles, con
-        lo que la operación sumó a las métricas de rotación. Se calcula por
-        diferencia porque una corrección hace delete + insert y cada una
-        reinicia last_rotations."""
+        """AUXILIAR: completes the snapshot after modifying the trees, with the operations that were
+        added to the rotation metrics. Gets calculated by the difference because a correction
+        does delete and insert, and each one resets last_rotations."""
         before = checkpoint["rotations_before"]
         checkpoint["rotation_delta"] = {
             k: self.metrics.get(k, 0) - before[k] for k in ROTATION_METRIC_KEYS
         }
-        # Lista de los casos atendidos en TODA la operación (sección 8: el
-        # paso de la cola muestra sus rotaciones; sección 14: el registro de
-        # la acción explica cómo se obtuvieron sus métricas).
+        # Lists the attended cases in the whole operation
         checkpoint["rotations"] = self.avl_tree.rotation_journal or []
         self.avl_tree.rotation_journal = None
         return checkpoint
 
     def _restore_tree_checkpoint(self, checkpoint: dict, event_ids=()) -> None:
-        """AUXILIAR: devuelve el AVL y el BST a la forma de la foto, resta
-        las rotaciones que sumó la operación y vuelve a apuntar event_index
-        de `event_ids` a sus nodos ORIGINALES (los de la foto; una corrección
-        o una eliminación los había sacado del árbol)."""
+        """AUXILIAR: returns the AVL and the BST to the original snapshot.
+        substracts the rotations that were added by the operation and 
+        rewrites event_index to the original nodes."""
         self.avl_tree.restore_topology(checkpoint["avl"])
         self.bst_tree.restore_topology(checkpoint["bst"])
         self.avl_tree.revert_rotation_metrics(checkpoint.get("rotation_delta", {}))
@@ -161,7 +151,7 @@ class Scenario:
                     self.event_index[node.event.event_id] = node
 
     def _revert_counters(self, delta: dict) -> None:
-        """AUXILIAR: resta el delta que guardó una acción (al deshacer)."""
+        """AUXILIAR: substracts the delta that an action saved (when undoing)."""
         for counter_key, amount in delta.items():
             self.metrics[counter_key] = self.metrics.get(counter_key, 0) - amount
 
@@ -788,9 +778,9 @@ class Scenario:
                 # Lower revision → old.
                 case = "old"
 
-        # Contadores de la sección 14 propios del paso. Las correcciones y
-        # reactivaciones ya se contaron dentro de correct_event /
-        # archived_reactivation (y su delta viaja en inner_action).
+        # Counters from the changes made on the step.
+        # The corrections and reactivations were already counted inside of correct_event
+        # / archived_reactivation (and its delta comes in inner_action)
         counter_delta = {}
         if case in ("conflict", "archived_conflict"):
             counter_delta["conflicts"] = 1
@@ -850,9 +840,8 @@ class Scenario:
         if self._id_exists(event_id):
             raise ValueError(f"El identificador {event_id} ya existe")
 
-        # Sección 3: ningún evento puede ser posterior al reloj de simulación.
-        # Se valida aquí (y no solo en el router o al encolar) para que
-        # ningún camino pueda crear un evento "del futuro".
+        # An event cannot happen after the current simulation clock.
+        # it gets validated here so an event from the future cannot be created
         if self._as_utc(occurred_at) > self.simulation_clock:
             raise ValueError(
                 f"La fecha del evento {event_id} es posterior al reloj de simulación"
@@ -869,7 +858,7 @@ class Scenario:
 
         balance = (self.mode == Mode.NORMAL)
 
-        # Foto de los árboles ANTES de insertar (para deshacer exacto).
+        # Snapshot of the trees before insertion (so the undo returns to the same state)
         checkpoint = self._tree_checkpoint()
         node = self.avl_tree.insert(event, balance=balance)
         self.bst_tree.insert(event)
@@ -991,8 +980,8 @@ class Scenario:
             if event_id not in self.event_index:
                 raise KeyError(f"No existe un evento con id {event_id}")
 
-            # La fecha corregida no puede ser posterior al reloj (sección 3).
-            # Se valida aquí, antes de modificar nada.
+            # The corrected date cannot be after the clock (section 3).
+            # Validated here, before modifying anything.
             if changes.get("occurred_at") is not None:
                 if self._as_utc(changes["occurred_at"]) > self.simulation_clock:
                     raise ValueError(
@@ -1039,7 +1028,7 @@ class Scenario:
             # the new one. event_index is updated with the NEW node.
             balance = (self.mode == Mode.NORMAL)
 
-            # Foto de los árboles ANTES de reubicar (para deshacer exacto).
+            # Snapshot of trees BEFORE relocating (for exact undo).
             checkpoint = self._tree_checkpoint()
             if old_key != new_key:
                 self.avl_tree.delete(old_key, balance=balance)
@@ -1088,7 +1077,7 @@ class Scenario:
             for other in affected_others:
                 self._recalculate_reference(other)
 
-            # Contador de la sección 14: una corrección aceptada más.
+            # Counter of accepted correction
             counter_delta = {"corrections_accepted": 1}
             self._add_counters(counter_delta)
 
@@ -1185,7 +1174,7 @@ class Scenario:
             # between these three does not matter: we already have `event` saved
             # in a variable, we do not depend on it being in any of them.
             balance = (self.mode == Mode.NORMAL)
-            # Foto de los árboles ANTES de eliminar (para deshacer exacto).
+            # Snapshot of trees BEFORE deleting (for exact undo).
             checkpoint = self._tree_checkpoint()
             self.avl_tree.delete(key, balance=balance)
             self.bst_tree.delete(key)
@@ -1285,7 +1274,7 @@ class Scenario:
 
         # 5. Insert into AVL and BST (creation, not relocation).
         balance = (self.mode == Mode.NORMAL)
-        # Foto de los árboles ANTES de insertar (para deshacer exacto).
+        # Snapshot of the trees before the insertion (so undo returns to the same state)
         checkpoint = self._tree_checkpoint()
         node = self.avl_tree.insert(event, balance=balance)
         self.bst_tree.insert(event)
@@ -1323,8 +1312,8 @@ class Scenario:
         for other in affected_others:
             self._recalculate_reference(other)
 
-        # Contador de la sección 14: una reactivación es una revisión mayor
-        # aceptada, así que cuenta como corrección aceptada.
+        # Section 14 counter: a reactivation is an accepted higher
+        # revision, so it counts as an accepted correction.
         counter_delta = {"corrections_accepted": 1}
         self._add_counters(counter_delta)
 
@@ -1680,7 +1669,7 @@ class Scenario:
 
         # 3. Detach. In normal mode it rotates; in stress mode, it does not.
         balance = (self.mode == Mode.NORMAL)
-        # Foto de los árboles ANTES de desprender (para deshacer exacto).
+        # Snapshot of the trees before detaching them
         checkpoint = self._tree_checkpoint()
         archived_root, former_parent, was_left_child = self.avl_tree.detach_subtree(
             node, balance=balance
@@ -1699,8 +1688,7 @@ class Scenario:
         # NOTE: reference_id and referenced_by are NOT touched (associations).
         self._close_tree_checkpoint(checkpoint)
 
-        # Contadores de la sección 14: un archivo masivo más y los eventos
-        # que se fueron al histórico.
+        # Counters for the historic
         counter_delta = {"mass_archives": 1, "archived_events": len(event_ids)}
         self._add_counters(counter_delta)
 
@@ -1786,21 +1774,6 @@ class Scenario:
             "recorded": recorded,
         }
 
-
-
-
- 
-
-
-
-
-
-
-
-
-
-
-
     def undo(self) -> dict:
         """Undo the last action pushed on the undo stack (section 13).
 
@@ -1882,6 +1855,7 @@ class Scenario:
 
     def _undo_zone_change(self, action: ZoneAction) -> dict:
         if action.operation == "create":
+            #assert checks that the condition is met
             assert action.new_zone is not None
             zone = action.new_zone
             self.zones.remove(zone)
@@ -1921,14 +1895,13 @@ class Scenario:
         event_id = action.event_id
         event = self.event_index[event_id].event
 
-        # El evento creado sale del índice inverso: si se le había asignado
-        # una referencia, referenced_by[referencia] lo seguiría nombrando y
-        # quedaría apuntando a un evento que ya no existe.
+        # The created event comes from the inverted index.
+        # if a reference had been assigned to it, referenced_by[reference]
+        # will continue to name it an it would point to an event that no longer exists.
         self._assign_reference(event, None)
 
-        # Los árboles vuelven a la forma exacta de antes de insertar (el nodo
-        # nuevo no está en la foto, así que queda fuera) y se restan las
-        # rotaciones que causó la inserción.
+        # The trees return to the exact shape from before the insertion
+        # and the rotations that were caused by the insertion get removed
         self._restore_tree_checkpoint(action.tree_checkpoint)
         del self.event_index[event_id]
 
@@ -1959,10 +1932,9 @@ class Scenario:
         event.revision = action.old_revision
         event.attention_status = action.old_attention_status
 
-        # priority y key son @property: al restaurar los valores, la clave
-        # vieja se recalcula sola. Los árboles vuelven a la forma exacta de
-        # antes de la corrección, con el nodo ORIGINAL del evento en su
-        # lugar (si la clave había cambiado, la corrección creó otro nodo).
+        # priority and key are @property: when reinstating the values, the old key
+        # recalculates on its own. The trees go back to the exact shape they had before the correction
+        # with the original node on its place (had the key changed, the correction would have created a new node)
         self._restore_tree_checkpoint(action.tree_checkpoint, [event_id])
 
         for other_id, old_ref in action.old_references.items():
@@ -1973,28 +1945,26 @@ class Scenario:
         return {"undone": "correction", "event_id": event_id}
     
     def _undo_reactivation(self, action: ReactivationAction) -> dict:
-        """Deshace una reactivación.
+        """Undoes a reactivation
 
-        A diferencia de _undo_correction, el evento NO se reubica dentro del
-        árbol — sale del AVL por completo y vuelve a archived_history, porque
-        antes de la reactivación no estaba en el AVL para nada.
+        Different from _undo_correction, the event does not get relocated,
+        it gets completely deleted from the AVL and returns to archived_history,
+        because before the reactivation, it wasn't on the AVL.
 
-        Orden importante: hay que localizar y retirar el evento usando su
-        clave ACTUAL (la que tiene ahora mismo, con los datos de la
-        reactivación) ANTES de restaurar los valores viejos — si se restauran
-        primero, event.key cambia (es un @property) y ya no coincide con la
-        posición donde está insertado en el árbol.
+        Important order: The event must be located and removed
+        using its current key before reinstating the old values.
+        If they got reinstated first, event.key changes and would no longer
+        match with the position where it was inserted in the tree.
 
-        1. Sacar el evento del AVL/BST/event_index con su clave actual.
-        2. Restaurar los 7 valores viejos sobre el mismo objeto.
-        3. Devolverlo a archived_history.
-        4. Restaurar las referencias de todos los afectados (incluido el
-        propio evento).
+        1. Takes the event out of the AVL/BST/event_index with its current key
+        2. Reinstates the 7 old values over the same object.
+        3. Returns it to archived_history
+        4. Reinstates the references of the affected events, including itself.
         """
         event_id = action.event_id
         event = self.event_index[event_id].event
 
-        # Árboles a la forma exacta de antes de reinsertar el evento.
+        # Restores the tree's state to before the reinsertion
         self._restore_tree_checkpoint(action.tree_checkpoint)
         del self.event_index[event_id]
 
@@ -2017,19 +1987,19 @@ class Scenario:
         return {"undone": "reactivation", "event_id": event_id}
 
     def _undo_deletion(self, action: DeletionAction) -> dict:
-        """Deshace una eliminación:
-        1. Quita el id de eliminated_IDs (vuelve a estar disponible).
-        2. Reinserta el evento en AVL y BST.
-        3. Actualiza event_index con el nodo nuevo.
-        4. Restaura las referencias viejas.
+        """Undoes a deletion
+        1. Removes the id from eliminated_IDs
+        2. Reinserts the node in the AVL and BST
+        3. Updates the event index with the event
+        4. Reinstates the old references
         """
         event = action.event
         event_id = event.event_id
 
         self.eliminated_IDs.discard(event_id)
 
-        # Árboles a la forma exacta de antes de eliminar: el nodo ORIGINAL
-        # vuelve a su posición (no se reinserta como hoja).
+        # Trees to the same shape before deletion: the original node goes back to its position
+        # (it does not get reinserted as a leaf)
         self._restore_tree_checkpoint(action.tree_checkpoint, [event_id])
 
         for other_id, old_ref in action.old_references.items():
@@ -2038,15 +2008,15 @@ class Scenario:
         return {"undone": "deletion", "event_id": event_id}
 
     def _undo_attention_change(self, action: AttentionChangeAction) -> dict:
-        """Restaura solo el estado de atención viejo."""
+        """Restores only the old attention status."""
         event = self._find_any_event(action.event_id)
         event.attention_status = action.old_attention_status
         return {"undone": "attention_change", "event_id": action.event_id}
 
     def _undo_parameter_change(self, action: ParameterChangeAction) -> dict:
-        """Restaura el valor viejo de cada parámetro que cambió la acción.
-        Si alguno era W o R, también restaura las referencias que el cambio
-        había recalculado."""
+        """Restores the old value of each parameter changed by the action.
+        If any was W or R, also restores the references that the change
+        had recalculated."""
         for name, old_value in action.old_values.items():
             setattr(self, name, old_value)
 
@@ -2057,22 +2027,22 @@ class Scenario:
         return {"undone": "parameter_change", "parameter": action.parameter_name}
 
     def _undo_clock_advance(self, action: ClockAdvanceAction) -> dict:
-        """Restaura el reloj de simulación al instante exacto previo."""
+        """Restores the simulation clock to the exact previous instant."""
         self.simulation_clock = action.old_clock
         return {"undone": "clock_advance"}
 
     def _undo_queue_step(self, action: QueueStepAction) -> dict:
-        """Deshace un paso de la cola.
+        """Undoes a queue step.
 
-        Orden:
-        1. Quitar la estación confirmada (si aplica), ANTES de revertir
-           inner_action: si inner_action fue una creación, el evento
-           desaparece y ya no podríamos quitarle la estación.
-        2. Revertir inner_action (si existe) llamando al helper
-           correspondiente.
-        3. Devolver el reporte a la cola en su posición original.
+        Order:
+        1. Remove the confirmed station (if applicable), BEFORE reverting
+           inner_action: if inner_action was a creation, the event
+           disappears and we could no longer remove the station from it.
+        2. Revert inner_action (if present) by calling the corresponding
+           helper.
+        3. Return the report to the queue in its original position.
         """
-        # 1. Estación confirmada.
+        # 1. Confirmed station.
         if action.confirmed_station_id is not None:
             station = self.stations.get(action.confirmed_station_id)
             if station is not None:
@@ -2080,11 +2050,11 @@ class Scenario:
                     event = self._find_any_event(action.report.event_id)
                     event.stations.discard(station)
                 except KeyError:
-                    # El evento ya no existe (por ejemplo, era una creación
-                    # y aún no se revirtió). No hay estación que quitar.
+                    # The event no longer exists (for example, it was a creation
+                    # and was not yet reverted). No station to remove.
                     pass
 
-        # 2. Revertir inner_action si la hubo.
+        # 2. Revert inner_action if present.
         if action.inner_action is not None:
             inner = action.inner_action
 
@@ -2102,30 +2072,30 @@ class Scenario:
                     f"QueueStepAction con inner_action de tipo {type(inner).__name__}"
                 )
 
-        # 3. Restar los contadores propios del paso (conflicto o descartado).
-        # Los de inner_action ya los restó su propio _undo_*.
+        # 3. Subtract step's own counters (conflict or discarded).
+        # inner_action counters were already subtracted by its own _undo_*.
         self._revert_counters(action.counter_delta)
 
-        # 4. Devolver el reporte a la cola.
+        # 4. Return the report to the queue.
         self.report_queue.insert_at(action.queue_position, action.report)
 
         return {"undone": "queue_step", "event_id": action.report.event_id}
 
     def _undo_mass_archive(self, action: MassArchiveAction) -> dict:
-        """Deshace un archivo masivo.
+        """Undoes a mass archive.
 
-        Pasos:
-        1. Re-enganchar el subárbol desprendido en su posición original,
-           subiendo por el camino para rebalancear.
-        2. Recorrer los nodos del subárbol y devolverlos a event_index y
-           sacarlos de archived_history.
-        3. Restar rotation_delta de las métricas.
+        Steps:
+        1. Reattach the detached subtree in its original position,
+           going up the path to rebalance.
+        2. Traverse the subtree nodes and return them to event_index and
+           remove them from archived_history.
+        3. Subtract rotation_delta from metrics.
 
-        Las asociaciones no se tocan: el archivo no las cambió.
+        Associations are not touched: archiving did not change them.
         """
-        # Árboles a la forma exacta de antes del archivo (la rama vuelve a
-        # colgar de donde estaba y se deshacen las rotaciones del ascenso);
-        # también resta las rotaciones que sumó el archivo.
+        # Trees to the exact shape from before archiving (branch hangs from
+        # where it was and ascent rotations are undone);
+        # also subtracts rotations added by archiving.
         self._restore_tree_checkpoint(action.tree_checkpoint, action.event_ids)
 
         for event_id in action.event_ids:
@@ -2137,40 +2107,40 @@ class Scenario:
         return {"undone": "mass_archive", "root_id": action.archived_root.event.event_id}
 
     def _undo_global_recovery(self, action: GlobalRecoveryAction) -> dict:
-        """Deshace una recuperación global: restaura la topología del AVL
-        y las métricas de rotación, y vuelve al modo anterior."""
+        """Undoes a global recovery: restores AVL topology
+        and rotation metrics, and returns to previous mode."""
         self.avl_tree.restore_topology(action.topology_snapshot)
         self.avl_tree.revert_rotation_metrics(action.rotation_delta)
         self.mode = action.previous_mode
         return {"undone": "global_recovery"}
 
     def _undo_load(self, action: LoadAction) -> dict:
-        """Deshace la carga de un escenario restaurando el estado anterior.
+        """Undoes the loading of a scenario by restoring the previous state.
 
-        action.previous_state es el dict que armó _snapshot_full_state()
-        justo antes de cargar (ver "ESTADO COMPLETO DEL ESCENARIO"): los
-        objetos originales del escenario anterior, intactos, con la
-        topología real del AVL y del BST. Se vuelven a poner en self.
+        action.previous_state is the dict built by _snapshot_full_state()
+        right before loading (see "FULL SCENARIO STATE"): the
+        original objects of the previous scenario, intact, with the
+        real AVL and BST topology. Reassigned to self.
         """
         self._restore_full_state(action.previous_state)
         return {"undone": "load"}
 
     def first_k_pending(self, k: int) -> tuple[list[Event], int]:
-        """Primeros k eventos pendientes de atención, en orden descendente
-        de K = (P, M, I).
+        """First k events pending attention, in descending order
+        of K = (P, M, I).
 
-        Sección 11, primera consulta: "Los primeros k eventos pendientes de
-        atención en orden descendente de K. k es entero positivo; si hay
-        menos pendientes, se muestran todos los disponibles."
+        Section 11, first query: "The first k events pending
+        attention in descending order of K. k is a positive integer; if there
+        are fewer pending, all available ones are shown."
 
-        Decisiones:
-        - k <= 0 → ValueError. El enunciado exige "entero positivo", así
-            que no se admite 0 ni negativos.
-        - Se usa reverse-inorden (derecha, nodo, izquierda) con corte
-            temprano: en cuanto se juntan k pendientes, se detiene sin
-            visitar más nodos.
-        - Devuelve tupla (lista_de_eventos, nodos_examinados). El enunciado
-            exige reportar la cantidad de nodos del AVL examinados.
+        Decisions:
+        - k <= 0 → ValueError. The specification requires "positive integer", so
+            0 and negatives are not allowed.
+        - Reverse-inorder (right, node, left) with early stopping is used:
+            as soon as k pending events are gathered, it stops without
+            visiting more nodes.
+        - Returns tuple (event_list, examined_nodes). The specification
+            requires reporting the count of examined AVL nodes.
         """
         if k <= 0:
             raise ValueError("k must be a positive integer")
@@ -2183,9 +2153,9 @@ class Scenario:
     
 
     def _collect_k_pending(self, node, k, result, counter):
-        """AUXILIAR: reverse-inorden con corte. Primero derecha (K alto),
-        luego el nodo, luego izquierda (K bajo). Corta en cuanto result
-        tiene k elementos."""
+        """HELPER: reverse-inorder with early stopping. First right (high K),
+        then node, then left (low K). Stops as soon as result
+        has k elements."""
         if node is None or len(result) >= k:
             return
 
@@ -2200,53 +2170,51 @@ class Scenario:
         self._collect_k_pending(node.left_son, k, result, counter)
 
     def event_associations(self, event_id: int) -> dict:
-        """Devuelve las asociaciones completas de un evento: candidatos,
-        referencia elegida, y quiénes lo usan como referencia.
+        """Returns the full associations of an event: candidates,
+        chosen reference, and who uses it as reference.
 
-        Sección 11, cuarta consulta: "Candidatos y referencia elegida para
-        un evento, así como los eventos que lo utilizan como referencia. Se
-        identifica si cada resultado está activo o archivado."
+        Section 11, fourth query: "Candidates and chosen reference for
+        an event, as well as events using it as a reference. Each result
+        identifies whether it is active or archived."
 
-        Se devuelven TRES bloques, no dos, porque la relación es
-        bidireccional: no basta con saber a quién apunta este evento
-        (referencia) ni quiénes podrían ser su referencia (candidatos).
-        También hay que saber quiénes apuntan a él. Sin esa tercera parte,
-        la consulta solo daría la mitad de la red de asociaciones: las
-        salientes pero no las entrantes. Los candidatos y la referencia
-        salen de _build_associations (que ya usa get_event). El tercer
-        bloque sale del índice inverso referenced_by, que existe justo
-        para responder "quién me tiene como referencia" sin recorrer todos
-        los eventos.
+        THREE blocks are returned, not two, because the relationship is
+        bidirectional: knowing who this event points to (reference) and who
+        could be its reference (candidates) is not enough. We also must
+        know who points to it. Without that third part, the query would
+        only provide half the association network: outgoing, but not incoming.
+        Candidates and reference come from _build_associations (which get_event
+        already uses). The third block comes from inverse index referenced_by,
+        which exists specifically to answer "who has me as reference" without
+        traversing all events.
 
-        Hay dos métodos (get_event y event_associations) porque sirven a
-        dos propósitos distintos:
-        - get_event devuelve TODO sobre un evento: datos, revisión,
-        estaciones, prioridad, estado, profundidad, altura, factor de
-        balance, y las asociaciones como un bloque más. Es la vista
-        completa de un evento.
-        - event_associations se enfoca SOLO en la red de asociaciones, y
-        agrega el bloque de "quién me usa" que get_event no trae. Es la
-        vista específica para cuando el frontend quiere mostrar la red
-        de réplicas de un evento sin cargar toda su ficha.
+        There are two methods (get_event and event_associations) because they serve
+        two distinct purposes:
+        - get_event returns EVERYTHING about an event: data, revision,
+        stations, priority, status, depth, height, balance factor, and
+        associations as one more block. It is the full view of an event.
+        - event_associations focuses ONLY on the association network, and
+        adds the "who uses me" block that get_event does not include. It is the
+        specific view when frontend wants to show the aftershock network
+        of an event without loading its full sheet.
 
-        Si el id no existe o está eliminado, lanza ValueError: los
-        eliminados no forman parte del sistema (solo queda su id en
-        eliminated_IDs), así que no tiene sentido pedir sus asociaciones.
+        If id does not exist or is eliminated, raises ValueError: eliminated
+        events are not part of system (only their id remains in
+        eliminated_IDs), so querying their associations makes no sense.
 
-        Devuelve un dict con:
+        Returns a dict with:
             {
-                "reference": {"event": Event, "status": "active"|"archived"} o None,
+                "reference": {"event": Event, "status": "active"|"archived"} or None,
                 "candidates": [{"event": Event, "status": ...}, ...],
                 "used_as_reference_by": [{"event": Event, "status": ...}, ...],
             }
-        `candidates` no incluye la referencia (ya viene en su propio
-        bloque). `used_as_reference_by` puede estar vacío si nadie lo usa
-        como referencia.
+        `candidates` does not include reference (already in its own
+        block). `used_as_reference_by` may be empty if nobody uses it
+        as reference.
 
-        No reporta nodos examinados: las otras consultas de la sección 11
-        sí lo hacen porque navegan el AVL directamente; aquí solo se lee
-        un dict (referenced_by) y se delega el cálculo de candidatos a
-        _build_associations, que ya es una consulta en sí misma.
+        Does not report examined nodes: other section 11 queries
+        do because they directly navigate AVL; here only a dict is read
+        (referenced_by) and candidate calculation is delegated to
+        _build_associations, which is already a query in itself.
         """
         if event_id in self.eliminated_IDs:
             raise ValueError(f"El evento {event_id} está eliminado, no tiene asociaciones")
@@ -2270,19 +2238,19 @@ class Scenario:
         }
 
     def events_in_magnitude_range(self, min_mag: float, max_mag: float) -> tuple[list[Event], int]:
-        """Eventos activos con min_mag <= M <= max_mag (inclusivo), en orden
-        ascendente de K.
+        """Active events with min_mag <= M <= max_mag (inclusive), in ascending
+        order of K.
 
-        Sección 11, segunda consulta: "Eventos dentro de un intervalo
-        inclusivo de magnitud."
+        Section 11, second query: "Events within an inclusive magnitude
+        interval."
 
-        Decisiones:
-        - min_mag > max_mag → ValueError. Rango inválido.
-        - No se puede podar el árbol: K ordena por PRIORIDAD antes que por
-            magnitud, así que una rama con prioridad baja puede contener
-            cualquier magnitud. Se recorre el árbol completo (inorden).
-        - Devuelve tupla (lista_de_eventos, nodos_examinados). El enunciado
-            exige reportar la cantidad de nodos del AVL examinados.
+        Decisions:
+        - min_mag > max_mag → ValueError. Invalid range.
+        - The tree cannot be pruned: K orders by PRIORITY before
+            magnitude, so a branch with low priority can contain
+            any magnitude. The full tree is traversed (inorder).
+        - Returns tuple (event_list, examined_nodes). The specification
+            requires reporting the count of examined AVL nodes.
         """
         if min_mag > max_mag:
             raise ValueError("min_mag cannot be greater than max_mag")
@@ -2293,8 +2261,8 @@ class Scenario:
         return result, counter[0]
 
     def _collect_by_magnitude(self, node, min_mag, max_mag, result, counter):
-        """AUXILIAR: inorden completo (izquierda, nodo, derecha). Cada nodo
-        no vacío cuenta como examinado."""
+        """HELPER: full inorder traversal (left, node, right). Each non-empty
+        node counts as examined."""
         if node is None:
             return
         counter[0] += 1
@@ -2304,30 +2272,30 @@ class Scenario:
         self._collect_by_magnitude(node.right_son, min_mag, max_mag, result, counter)
 
     def events_by_depth_and_date(self, max_depth: float, min_date: datetime, max_date: datetime) -> tuple[list[Event], int]:
-        """Eventos activos con depth <= max_depth Y min_date <= occurred_at <=
-        max_date (ambos límites inclusivos), en orden ascendente de K.
+        """Active events with depth <= max_depth AND min_date <= occurred_at <=
+        max_date (both limits inclusive), in ascending order of K.
 
-        Sección 11, segunda consulta (segunda mitad): "eventos con profundidad
-        del hipocentro menor o igual a un límite dentro de un intervalo
-        inclusivo de fechas."
+        Section 11, second query (second half): "events with hypocenter
+        depth less than or equal to a limit within an inclusive date
+        interval."
 
-        Decisiones:
-        - min_date > max_date → ValueError. Mismo criterio que
-        events_in_magnitude_range con min_mag > max_mag.
-        - max_depth no se valida aquí (podría venir negativo): los rangos de
-        los datos ya los valida el schema de pydantic, igual que el resto
-        de Scenario.
-        - No se puede podar el árbol: ni depth ni occurred_at forman parte de
-        K = (P, M, I), ni siquiera en segundo lugar (a diferencia de la
-        magnitud, que sí es parte de K aunque no mande el orden). No hay
-        ninguna relación entre la posición de un nodo y estos dos datos.
-        Se recorre el árbol completo (inorden).
-        - min_date/max_date se normalizan con _as_utc antes de comparar,
-        igual que ya hace update_simulation_clock y _validate_report con
-        fechas que entran desde afuera: así no falla si llegan sin zona
-        horaria o en otra zona distinta a la del evento guardado.
-        - Devuelve tupla (lista_de_eventos, nodos_examinados), igual que las
-        otras consultas de esta sección (el enunciado lo exige para todas).
+        Decisions:
+        - min_date > max_date → ValueError. Same criterion as
+        events_in_magnitude_range with min_mag > max_mag.
+        - max_depth is not validated here (could be negative): data ranges
+        are already validated by pydantic schema, same as the rest
+        of Scenario.
+        - The tree cannot be pruned: neither depth nor occurred_at are part of
+        K = (P, M, I), not even secondarily (unlike magnitude,
+        which is part of K though not the primary ordering). There is no
+        relationship between node position and these two values.
+        The full tree is traversed (inorder).
+        - min_date/max_date are normalized with _as_utc before comparing,
+        just as update_simulation_clock and _validate_report do with
+        incoming timestamps: avoiding failures if timezone is missing
+        or different from stored event.
+        - Returns tuple (event_list, examined_nodes), same as other
+        queries in this section (required by specification).
         """
         min_date = self._as_utc(min_date)
         max_date = self._as_utc(max_date)
@@ -2341,8 +2309,8 @@ class Scenario:
         return result, counter[0]
 
     def _collect_by_depth_and_date(self, node, max_depth, min_date, max_date, result, counter):
-        """AUXILIAR: inorden completo (izquierda, nodo, derecha). Cada nodo
-        no vacío cuenta como examinado."""
+        """HELPER: full inorder traversal (left, node, right). Each non-empty
+        node counts as examined."""
         if node is None:
             return
         counter[0] += 1
@@ -2353,29 +2321,29 @@ class Scenario:
         self._collect_by_depth_and_date(node.right_son, max_depth, min_date, max_date, result, counter)
 
     def costly_access_events(self) -> list[dict]:
-        """Eventos activos de prioridad alta con acceso costoso.
+        """Active high-priority events with costly access.
 
-        Sección 11, última consulta: "Eventos de prioridad alta con acceso
-        costoso, indicando profundidad del nodo, límite y número de nodos
-        visitados en su búsqueda por clave."
-        Sección 9: un evento de prioridad alta (P = 3) tiene acceso costoso
-        cuando su profundidad en el AVL es ESTRICTAMENTE mayor que L.
+        Section 11, last query: "High-priority events with costly
+        access, indicating node depth, limit, and number of nodes
+        visited in their search by key."
+        Section 9: a high-priority event (P = 3) has costly access
+        when its depth in the AVL is STRICTLY greater than L.
 
-        Es un wrapper de avl_tree.costly_access(L): el árbol hace el
-        recorrido, pero no conoce L (solo recibe un número), así que no
-        puede decir con qué límite comparó. Scenario sí lo conoce y lo
-        agrega a cada resultado.
+        Wrapper around avl_tree.costly_access(L): the tree performs the
+        traversal, but does not know L (only receives a number), so it
+        cannot say which limit it compared against. Scenario does know it and
+        adds it to each result.
 
-        Devuelve una lista de dicts, uno por evento con acceso costoso:
+        Returns a list of dicts, one per costly access event:
             {"event": Event, "depth": int, "visited": int, "limit": int}
-        - depth: profundidad del nodo (raíz = 0).
-        - visited: nodos visitados al buscarlo por clave = depth + 1.
-        - limit: el L vigente con el que se comparó.
-        Lista vacía = ningún evento de prioridad alta supera L.
+        - depth: node depth (root = 0).
+        - visited: nodes visited when searching by key = depth + 1.
+        - limit: current L compared against.
+        Empty list = no high-priority event exceeds L.
 
-        Se lee self.L en el momento de la consulta, así que si el usuario
-        cambia L (change_parameters) la siguiente consulta ya usa el nuevo.
-        Costo: O(n), recorre todo el árbol."""
+        self.L is read at query time, so if the user
+        changes L (change_parameters) the next query uses the new one.
+        Cost: O(n), traverses entire tree."""
         limit = self.L
         result = self.avl_tree.costly_access(limit)
         for item in result:
@@ -2383,49 +2351,49 @@ class Scenario:
         return result
 
     def verify_structure(self) -> dict:
-        """Opción "Verificar estructura" (sección 14), disponible en ambos
-        modos.
+        """Option "Verify structure" (section 14), available in both
+        modes.
 
-        Es un wrapper de avl_tree.audit(): el árbol revisa TODO (orden
-        global por K contra los límites de todos los ancestros, unicidad
-        de ids, ciclos o nodos compartidos, punteros parent, alturas y
-        factores de balance recalculados contra los guardados). Lo que
-        agrega Scenario es el modo actual:
-        - Modo NORMAL → require_balance=True: un factor fuera de {-1, 0, 1}
-          es un error.
-        - Modo STRESS → require_balance=False: el desbalance se informa
-          como "expected" (esperado), distinto de los errores de orden o
-          de metadatos, como pide la sección 14.
+        Wrapper around avl_tree.audit(): the tree verifies EVERYTHING (global
+        order by K against limits of all ancestors, uniqueness
+        of ids, cycles or shared nodes, parent pointers, heights and
+        balance factors recalculated against stored ones). What
+        Scenario adds is current mode:
+        - NORMAL mode → require_balance=True: a factor outside {-1, 0, 1}
+          is an error.
+        - STRESS mode → require_balance=False: imbalance is reported
+          as "expected", distinct from order or metadata errors,
+          as required by section 14.
 
-        Devuelve un dict pensado para que la interfaz lo muestre directo:
+        Returns a dict intended for direct frontend display:
             {
               "mode": "Normal" | "Stress",
-              "checked_nodes": int,          # eventos activos revisados
-              "is_valid": bool,              # True si no hay ningún "error"
-              "is_avl": bool,                # True si no hay ningún desbalance
-              "error_count": int,            # problemas con severity "error"
-              "expected_count": int,         # desbalances esperados (estrés)
-              "inconsistent_event_ids": [int],  # un id por evento con error
+              "checked_nodes": int,          # reviewed active events
+              "is_valid": bool,              # True if no "error" exists
+              "is_avl": bool,                # True if no imbalance exists
+              "error_count": int,            # issues with severity "error"
+              "expected_count": int,         # expected imbalances (stress)
+              "inconsistent_event_ids": [int],  # one id per event with error
               "issues": [ {event_id, type, severity, detail}, ... ],
             }
-        `issues` es la lista tal cual la devuelve audit(); todos sus
-        valores son datos simples (listos para JSON). Un mismo evento puede
-        tener varios problemas (por ejemplo altura y factor), por eso
-        inconsistent_event_ids los agrupa sin repetir.
+        `issues` is the list returned by audit(); all its
+        values are simple data (JSON ready). A single event can
+        have multiple problems (e.g. height and factor), which is why
+        inconsistent_event_ids groups them without duplicates.
 
-        `is_valid` es lo que debe consultar la recuperación global antes
-        de volver a modo normal (sección 8: "El retorno al modo normal solo
-        se completa cuando la auditoría confirma el equilibrio"): en ese
-        momento se exige is_valid e is_avl.
-        Costo: O(n)."""
+        `is_valid` is what global recovery must check before
+        returning to normal mode (section 8: "Return to normal mode only
+        completes when audit confirms balance"): at that
+        moment is_valid and is_avl are required.
+        Cost: O(n)."""
         require_balance = (self.mode == Mode.NORMAL)
         issues = self.avl_tree.audit(require_balance=require_balance)
 
         errors = [issue for issue in issues if issue["severity"] == "error"]
         expected = [issue for issue in issues if issue["severity"] == "expected"]
 
-        # Ids de eventos con errores reales, sin repetir y en orden de
-        # aparición (None = problema global, por ejemplo el tamaño).
+        # Ids of events with real errors, unique and in appearance order
+        # (None = global problem, e.g. size).
         inconsistent_ids = []
         for issue in errors:
             event_id = issue["event_id"]
@@ -2443,25 +2411,25 @@ class Scenario:
             "issues": issues,
         }
     def count_events_by_priority(self) -> dict:
-        """Cuenta eventos activos y archivados por prioridad.
+        """Count active and archived events by priority.
 
-        Sección 14 (Auditoría e indicadores): "La interfaz mantendrá visibles
-        o accesibles los siguientes indicadores: ... Eventos por prioridad,
-        pendientes de atención y eventos marcados con acceso costoso."
+        Section 14 (Audit and indicators): "The interface shall keep visible
+        or accessible the following indicators: ... Events by priority,
+        pending attention, and events marked with costly access."
 
-        Se cuentan activos Y archivados (los dos forman parte del sistema y
-        ambos pueden ser referencia de otros eventos según la sección 7). Los
-        eliminados NO se cuentan: no están en el sistema, solo queda su id.
+        Both active AND archived events are counted (both are part of the system
+        and both can be references for other events per Section 7). Eliminated
+        events are NOT counted: they are not in the system, only their id remains.
 
-        Se calcula AL VUELO, no acumulado: la prioridad de un evento puede
-        cambiar (corrección que suba la magnitud, cambio de zona poblada), y
-        mantener un contador acumulado obligaría a ajustarlo en cada una de
-        esas operaciones. Es más simple y consistente recalcularlo cada vez.
+        Calculated ON THE FLY, not accumulated: an event's priority can change
+        (correction increasing magnitude, change in populated zone), and
+        maintaining an accumulated counter would require adjusting it on each of
+        those operations. It is simpler and more consistent to recalculate each time.
 
-        Devuelve:
+        Returns:
             {"P1": n, "P2": n, "P3": n}
 
-        Costo: O(n).
+        Cost: O(n).
         """
         counts = {"P1": 0, "P2": 0, "P3": 0}
         for event in self._all_active_and_archived_events():
@@ -2469,18 +2437,18 @@ class Scenario:
         return counts
 
     def get_indicators(self) -> dict:
-        """Indicadores de la sección 14 en un solo diccionario, para que la
-        interfaz los mantenga visibles (GET /indicators):
+        """Section 14 indicators in a single dictionary, so the
+        interface can keep them visible (GET /indicators):
 
-        - Cantidad de eventos activos, archivados (históricos) y eliminados,
-          altura, hojas y los cuatro recorridos del AVL (como ids).
-        - Contadores: correcciones aceptadas, reportes descartados,
-          conflictos, archivos masivos y eventos archivados (COUNTER_KEYS).
-        - Casos LL, RR, LR, RL y giros simples (ROTATION_METRIC_KEYS).
-        - Eventos por prioridad (activos + archivados), pendientes de
-          atención (activos) y eventos con acceso costoso (con el L vigente).
+        - Count of active, archived (historical), and eliminated events,
+          height, leaves, and all four AVL traversals (as ids).
+        - Counters: accepted corrections, discarded reports,
+          conflicts, mass archives, and archived events (COUNTER_KEYS).
+        - LL, RR, LR, RL cases and simple rotations (ROTATION_METRIC_KEYS).
+        - Events by priority (active + archived), pending
+          attention (active), and costly access events (with the current L).
 
-        Solo lee: no modifica nada ni apila acciones. Costo: O(n + a)."""
+        Read-only: does not modify anything or push actions. Cost: O(n + a)."""
         active_events = self.avl_tree.inorder()
         pending = sum(
             1 for event in active_events
@@ -2503,29 +2471,29 @@ class Scenario:
         }
 
     def compare_avl_bst(self) -> dict:
-        """Compara AVL vs BST: altura, hojas y comparaciones al buscar las
-        mismas claves. Sección 11, último bloque: "Se compararán AVL y BST
-        mediante altura, hojas y comparaciones al buscar las mismas claves."
+        """Compare AVL vs BST: height, leaves, and comparisons when searching
+        the same keys. Section 11, last block: "AVL and BST will be compared
+        via height, leaves, and comparisons when searching the same keys."
 
-        Para cada evento activo se busca su clave en ambos árboles. search()
-        ya devuelve (nodo, nodos_visitados), así que solo se suman.
+        For each active event, its key is searched in both trees. search()
+        already returns (node, visited_nodes), so they are simply summed.
 
-        LIMITACIÓN: los dos árboles están sincronizados en el estado actual,
-        pero no con el mismo orden de inserción histórico. Si el escenario
-        se armó en orden ascendente, el BST está degenerado y la diferencia
-        es enorme; si el orden fue aleatorio, la diferencia es más sutil.
-        El caso "todo en orden ascendente" se prueba con datos específicos,
-        no con esta consulta.
+        LIMITATION: both trees are synchronized in the current state,
+        but not with the same historical insertion order. If the scenario
+        was built in ascending order, the BST is degenerate and the difference
+        is enormous; if the order was random, the difference is subtler.
+        The "all in ascending order" case is tested with specific data,
+        not with this query.
 
-        Devuelve dos bloques comparables (avl y bst), cada uno con size,
-        height, leaves, total_comparisons, max_single_search y
-        avg_comparisons, más n_searches.
+        Returns two comparable blocks (avl and bst), each with size,
+        height, leaves, total_comparisons, max_single_search, and
+        avg_comparisons, plus n_searches.
         """
-        # Claves de todos los eventos activos, en orden ascendente de K.
+        # Keys of all active events, in ascending order of K.
         keys = [event.key for event in self.avl_tree.inorder()]
 
-        # Sumar nodos visitados al buscar cada clave en cada árbol.
-        # max_* guarda la peor búsqueda individual (profundidad máxima + 1).
+        # Sum visited nodes when searching each key in each tree.
+        # max_* tracks the worst single search (maximum depth + 1).
         avl_total = 0
         avl_max = 0
         for key in keys:
@@ -2565,38 +2533,38 @@ class Scenario:
 
 
     """==============================================="""
-    """====ESTADO COMPLETO Y CARGA (SECCIONES 12-13)==="""
+    """====FULL STATE AND LOAD (SECTIONS 12-13)======="""
     """==============================================="""
 
-    # ESTADO COMPLETO DEL ESCENARIO
+    # COMPLETE SCENARIO STATE
     #
-    # Es todo lo que reemplaza una carga y lo que guarda LoadAction para
-    # poder deshacerla: AVL (estructura real), BST (estructura real),
+    # Everything that a load replaces and that LoadAction saves in order
+    # to undo it: AVL (real structure), BST (real structure),
     # event_index, archived_history, eliminated_IDs, referenced_by, zones,
-    # stations, report_queue, reloj, L, W, R, T, mode y metrics.
+    # stations, report_queue, clock, L, W, R, T, mode, and metrics.
     #
-    # Decisión: se guardan los OBJETOS ORIGINALES, no copias profundas.
-    # - Es seguro porque una carga NUNCA modifica el estado viejo: construye
-    #   objetos nuevos y los asigna a self (_restore_full_state). El estado
-    #   viejo queda intacto dentro de LoadAction, con su topología exacta
-    #   (son los mismos nodos, con los mismos enlaces y alturas).
-    # - Es NECESARIO conservar la identidad: las acciones apiladas ANTES de
-    #   la carga guardan referencias a nodos y eventos reales (por ejemplo
-    #   MassArchiveAction guarda archived_root y former_parent, que son
-    #   AVLNode del árbol). Si se restaurara una copia profunda, esos nodos
-    #   ya no estarían en el árbol restaurado y deshacer el archivo lo
-    #   rompería.
-    # - Memoria: O(1) por la foto (solo referencias), en vez de O(n).
+    # Decision: ORIGINAL OBJECTS are saved, not deep copies.
+    # - Safe because a load NEVER modifies the old state: it constructs
+    #   new objects and assigns them to self (_restore_full_state). The old
+    #   state remains intact inside LoadAction, with its exact topology
+    #   (they are the same nodes, with the same links and heights).
+    # - Preserving identity is NECESSARY: actions pushed BEFORE
+    #   the load hold references to real nodes and events (for instance,
+    #   MassArchiveAction holds archived_root and former_parent, which are
+    #   AVLNode instances from the tree). If a deep copy were restored, those nodes
+    #   would no longer be in the restored tree and undoing the archive would
+    #   break.
+    # - Memory: O(1) for the snapshot (only references), instead of O(n).
     #
-    # El reloj se guarda como VALOR (self.simulation_clock en ese instante)
-    # y se restaura con el setter, igual que ClockAdvanceAction.
+    # The clock is saved as a VALUE (self.simulation_clock at that moment)
+    # and restored with the setter, just like ClockAdvanceAction.
     #
-    # La pila de deshacer NO es parte del estado: es la historia. La
-    # LoadAction se apila encima de las acciones anteriores, y al deshacer
-    # la carga esas acciones vuelven a aplicar sobre el estado restaurado.
+    # The undo stack is NOT part of the state: it is history. The
+    # LoadAction is pushed on top of previous actions, and when undoing
+    # the load those actions apply again on the restored state.
 
     def _snapshot_full_state(self) -> dict:
-        """AUXILIAR: foto del estado operativo completo (ver arriba)."""
+        """HELPER: snapshot of the complete operational state (see above)."""
         return {
             "avl_tree": self.avl_tree,
             "bst_tree": self.bst_tree,
@@ -2617,11 +2585,11 @@ class Scenario:
         }
 
     def _restore_full_state(self, state: dict) -> None:
-        """AUXILIAR: reemplaza el estado operativo por el de `state` (un
-        dict con la forma de _snapshot_full_state). La usan load_scenario
-        (para poner el estado nuevo) y _undo_load (para volver al viejo).
-        No toca undo_stack. Mantiene que self.metrics sea el MISMO dict que
-        usa self.avl_tree (una sola fuente de verdad para las rotaciones)."""
+        """HELPER: replaces the operational state with that of `state` (a
+        dict with the shape of _snapshot_full_state). Used by load_scenario
+        (to set the new state) and _undo_load (to return to the old state).
+        Does not touch undo_stack. Maintains that self.metrics is the SAME dict
+        used by self.avl_tree (a single source of truth for rotations)."""
         self.avl_tree = state["avl_tree"]
         self.bst_tree = state["bst_tree"]
         self.event_index = state["event_index"]
@@ -2840,7 +2808,7 @@ class Scenario:
         else:
             new_state, warnings = self._build_state_from_topology(data, general, from_version)
 
-        # Todo validó: ahora sí se aplica.
+        # Everything validated: now apply it.
         previous_state = self._snapshot_full_state()
         self._restore_full_state(new_state)
         self.undo_stack.push(LoadAction(previous_state))
@@ -2858,26 +2826,26 @@ class Scenario:
             "bst": self._load_tree_summary(self.bst_tree),
         }
 
-    # ---------------- AUXILIARES DE LA CARGA ----------------
+    # ---------------- LOAD HELPERS ----------------
 
     _INSERTION_EVENT_FIELDS = ("event_id", "magnitude", "depth", "x", "y", "occurred_at", "station_id")
     _STORED_EVENT_FIELDS = ("event_id", "magnitude", "depth", "x", "y", "occurred_at",
                             "revision", "stations", "attention_status")
     _TOPOLOGY_NODE_FIELDS = _STORED_EVENT_FIELDS + ("priority", "height", "balance_factor", "left_id", "right_id")
     _REPORT_FIELDS = ("event_id", "revision_num", "station_id", "magnitude", "depth", "x", "y", "occurred_at")
-    # Orden en que se informan los errores de la auditoría al cargar
-    # (primero referencias y unicidad, luego orden, luego metadatos).
+    # Order in which audit errors are reported when loading
+    # (first references and uniqueness, then order, then metadata).
     _AUDIT_ERROR_ORDER = ("reference", "uniqueness", "size", "order", "height", "balance_factor")
 
     @staticmethod
     def _load_error(where: str, message: str) -> ValueError:
-        """AUXILIAR: error de carga con el lugar exacto del problema."""
+        """HELPER: load error with the exact location of the issue."""
         return ValueError(f"Carga rechazada. {where}: {message}")
 
     @staticmethod
     def _load_tree_summary(tree) -> dict:
-        """AUXILIAR: raíz, altura, profundidad máxima y hojas (sección 12).
-        La profundidad máxima de un árbol es su altura (raíz = 0)."""
+        """HELPER: root, height, maximum depth, and leaves (section 12).
+        The maximum depth of a tree is its height (root = 0)."""
         height = tree.height()
         return {
             "root_id": tree.root.event.event_id if tree.root is not None else None,
@@ -2887,7 +2855,7 @@ class Scenario:
         }
 
     def _load_require(self, raw, fields, where: str) -> None:
-        """AUXILIAR: `raw` debe ser un objeto con todos los `fields`."""
+        """HELPER: `raw` must be an object with all `fields`."""
         if not isinstance(raw, dict):
             raise self._load_error(where, "debe ser un objeto")
         missing = [field for field in fields if field not in raw]
@@ -2895,7 +2863,7 @@ class Scenario:
             raise self._load_error(where, f"faltan campos obligatorios: {', '.join(missing)}")
 
     def _load_list(self, data: dict, key: str, required: bool = False) -> list:
-        """AUXILIAR: lee una lista del archivo ([] si es opcional y no viene)."""
+        """HELPER: reads a list from the file ([] if optional and omitted)."""
         if key not in data:
             if required:
                 raise self._load_error(key, "falta esta sección")
@@ -2906,8 +2874,8 @@ class Scenario:
         return value
 
     def _load_number(self, value, where: str, field: str, low: float, high: float, one_decimal: bool = True) -> float:
-        """AUXILIAR: número finito en [low, high], con máximo un decimal
-        (mismo criterio que _check_one_decimal en schemas/report.py)."""
+        """HELPER: finite number in [low, high], with at most one decimal place
+        (same criterion as _check_one_decimal in schemas/report.py)."""
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise self._load_error(where, f"{field} debe ser un número (llegó {value!r})")
         if not math.isfinite(value):
@@ -2919,7 +2887,7 @@ class Scenario:
         return round(float(value), 1) if one_decimal else float(value)
 
     def _load_int(self, value, where: str, field: str, low: int, high: Optional[int] = None) -> int:
-        """AUXILIAR: entero (no booleano) en [low, high]."""
+        """HELPER: integer (not boolean) in [low, high]."""
         if isinstance(value, bool) or not isinstance(value, int):
             raise self._load_error(where, f"{field} debe ser un entero (llegó {value!r})")
         if value < low or (high is not None and value > high):
@@ -2928,8 +2896,8 @@ class Scenario:
         return value
 
     def _load_datetime(self, value, where: str, field: str) -> datetime:
-        """AUXILIAR: fecha ISO 8601 con zona horaria y precisión de
-        segundos, normalizada a UTC (mismo criterio que ReportCreate)."""
+        """HELPER: ISO 8601 datetime with timezone and seconds precision,
+        normalized to UTC (same criterion as ReportCreate)."""
         if isinstance(value, str):
             try:
                 value = datetime.fromisoformat(value)
@@ -2944,14 +2912,14 @@ class Scenario:
         return value.astimezone(timezone.utc)
 
     def _load_station_id(self, value, where: str, field: str) -> str:
-        """AUXILIAR: id de estación, texto no vacío (como StationCreate)."""
+        """HELPER: station id, non-empty string (like StationCreate)."""
         if not isinstance(value, str) or not value:
             raise self._load_error(where, f"{field} debe ser un texto no vacío")
         return value
 
     def _load_event_values(self, raw: dict, where: str, clock: datetime) -> dict:
-        """AUXILIAR: datos físicos de un evento (secciones 3 y 12): id,
-        magnitud, profundidad, epicentro y fecha (no posterior al reloj)."""
+        """HELPER: physical data of an event (sections 3 and 12): id,
+        magnitude, depth, epicenter, and date (not later than the clock)."""
         values = {
             "event_id": self._load_int(raw["event_id"], where, "event_id", 1, 999999),
             "magnitude": self._load_number(raw["magnitude"], where, "magnitude", -2.0, 10.0),
@@ -2968,8 +2936,8 @@ class Scenario:
         return values
 
     def _load_stored_event(self, raw: dict, where: str, clock: datetime) -> dict:
-        """AUXILIAR: evento guardado (activo o archivado): datos físicos +
-        revisión, estaciones aceptadas y estado de atención."""
+        """HELPER: stored event (active or archived): physical data +
+        revision, accepted stations, and attention status."""
         values = self._load_event_values(raw, where, clock)
         values["revision"] = self._load_int(raw["revision"], where, "revision", 1)
         if not isinstance(raw["stations"], list):
@@ -2984,10 +2952,10 @@ class Scenario:
         return values
 
     def _load_general_sections(self, data: dict) -> dict:
-        """AUXILIAR: reloj, parámetros, zonas y estaciones del archivo. Lo
-        que no venga se hereda del escenario actual (en contenedores
-        NUEVOS, para no compartir listas/dicts con el estado viejo, que
-        queda guardado en LoadAction)."""
+        """HELPER: clock, parameters, zones, and stations from the file.
+        Omitted fields are inherited from the current scenario (in NEW
+        containers, avoiding shared lists/dicts with the old state saved
+        in LoadAction)."""
         inherited = []
 
         if "simulation_clock" in data:
@@ -3055,24 +3023,24 @@ class Scenario:
 
     @staticmethod
     def _populated(zones: list, x: float, y: float) -> bool:
-        """AUXILIAR: misma regla que epicenter_in_populated_zone, pero con
-        las zonas del ARCHIVO (no las del escenario actual)."""
+        """HELPER: same rule as epicenter_in_populated_zone, but using
+        the zones from the FILE (not those of the current scenario)."""
         return any(zone.contains(x, y) and zone.is_populated for zone in zones)
 
     def _build_state_from_insertions(self, data: dict, general: dict) -> tuple[dict, list]:
-        """AUXILIAR: modo 1, carga por inserciones. Valida en el orden
-        acordado (campos, rangos y fechas, ids únicos, estaciones) y
-        construye el estado nuevo en un Scenario TEMPORAL usando
-        create_event, para reutilizar exactamente la misma lógica de alta
-        (zona poblada, prioridad, AVL con balanceo, BST, event_index y
-        asociaciones). self no se toca."""
+        """HELPER: mode 1, load by insertions. Validates in the agreed
+        order (fields, ranges, and dates, unique ids, stations) and
+        builds the new state in a TEMPORARY Scenario using
+        create_event, reusing the exact same registration logic
+        (populated zone, priority, balanced AVL, BST, event_index, and
+        associations). self is not touched."""
         events = self._load_list(data, "events", required=True)
 
-        # 1. Campos obligatorios de todos los eventos.
+        # 1. Mandatory fields for all events.
         for i, raw in enumerate(events):
             self._load_require(raw, self._INSERTION_EVENT_FIELDS, f"events[{i}]")
 
-        # 2. Rangos y fechas (no posteriores al reloj).
+        # 2. Ranges and dates (not after the clock).
         parsed = []
         for i, raw in enumerate(events):
             where = f"events[{i}]"
@@ -3080,7 +3048,7 @@ class Scenario:
             values["station_id"] = self._load_station_id(raw["station_id"], where, "station_id")
             parsed.append(values)
 
-        # 3. Ids únicos (un id duplicado invalida el archivo, sección 12).
+        # 3. Unique ids (a duplicate id invalidates the file, section 12).
         first_position = {}
         for i, values in enumerate(parsed):
             event_id = values["event_id"]
@@ -3090,13 +3058,13 @@ class Scenario:
                 )
             first_position[event_id] = i
 
-        # 4. La estación de cada evento debe existir.
+        # 4. Each event's station must exist.
         for i, values in enumerate(parsed):
             if values["station_id"] not in general["stations"]:
                 raise self._load_error(f"events[{i}]", f"la estación {values['station_id']!r} no existe")
 
-        # Construcción: mismo comparador y mismo orden en AVL (con balanceo)
-        # y BST (sin balanceo). Queda en modo NORMAL (sección 12).
+        # Construction: same comparator and same order in AVL (with balancing)
+        # and BST (without balancing). Remains in NORMAL mode (section 12).
         params = general["params"]
         temp = Scenario(zones=general["zones"], stations=general["stations"],
                         simulation_clock=general["clock"], L=params["L"], W=params["W"],
@@ -3111,9 +3079,9 @@ class Scenario:
 
     def _build_state_from_topology(self, data: dict, general: dict,
                                    from_version: bool = False) -> tuple[dict, list]:
-        """AUXILIAR: modo 2, carga por topología. Además de lo del modo 1,
-        valida la consistencia de la topología. Corta en el primer error.
-        Construye todo en objetos nuevos; self no se toca."""
+        """HELPER: mode 2, load by topology. In addition to mode 1 checks,
+        validates topological consistency. Aborts on the first error.
+        Builds everything in new objects; self is not touched."""
         clock = general["clock"]
         stations = general["stations"]
         zones = general["zones"]
@@ -3129,7 +3097,7 @@ class Scenario:
         eliminated_raw = self._load_list(data, "eliminated_ids")
         queue_raw = self._load_list(data, "report_queue")
 
-        # 1. Campos obligatorios.
+        # 1. Mandatory fields.
         for i, raw in enumerate(nodes_raw):
             self._load_require(raw, self._TOPOLOGY_NODE_FIELDS, f"avl.nodes[{i}]")
         for i, raw in enumerate(archived_raw):
@@ -3137,7 +3105,7 @@ class Scenario:
         for i, raw in enumerate(queue_raw):
             self._load_require(raw, self._REPORT_FIELDS, f"report_queue[{i}]")
 
-        # 2. Rangos, fechas y datos guardados de cada evento.
+        # 2. Ranges, dates, and stored data for each event.
         nodes = []
         for i, raw in enumerate(nodes_raw):
             where = f"avl.nodes[{i}]"
@@ -3164,8 +3132,8 @@ class Scenario:
         eliminated = [self._load_int(value, f"eliminated_ids[{i}]", "id", 1, 999999)
                     for i, value in enumerate(eliminated_raw)]
 
-        # 3. Unicidad: un id no puede repetirse ni estar a la vez activo,
-        #    archivado o eliminado.
+        # 3. Uniqueness: an id cannot be repeated nor be simultaneously active,
+        #    archived, or eliminated.
         owner = {}
         for label, items in (("activo", [(v["where"], v["event_id"]) for v in nodes]),
                             ("archivado", [(v["where"], v["event_id"]) for v in archived]),
@@ -3179,14 +3147,14 @@ class Scenario:
                     )
                 owner[event_id] = (where, label)
 
-        # 4. Las estaciones referenciadas deben existir.
+        # 4. Referenced stations must exist.
         for values in nodes + archived:
             for station_id in values["station_ids"]:
                 if station_id not in stations:
                     raise self._load_error(values["where"], f"la estación {station_id!r} no existe")
 
-        # 5. Referencias válidas: root_id y cada left_id/right_id apuntan a
-        #    un nodo activo del archivo, o son null.
+        # 5. Valid references: root_id and each left_id/right_id point to
+        #    an active node in the file, or are null.
         by_id = {v["event_id"]: v for v in nodes}
         root_id = avl["root_id"]
         if not nodes:
@@ -3203,8 +3171,8 @@ class Scenario:
                 if child == values["event_id"]:
                     raise self._load_error(values["where"], f"{side} apunta al propio nodo (ciclo)")
 
-        # 6. Cada nodo en una sola posición: un id no puede ser hijo de dos
-        #    padres (ni dos veces del mismo), y la raíz no puede ser hija.
+        # 6. Each node in a single position: an id cannot be a child of two
+        #    parents (nor twice of the same), and the root cannot be a child.
         parent_of = {}
         for values in nodes:
             for side in ("left_id", "right_id"):
@@ -3221,7 +3189,7 @@ class Scenario:
         if root_id in parent_of:
             raise self._load_error("avl.root_id", f"la raíz {root_id} aparece como hijo de {parent_of[root_id][0]} (ciclo)")
 
-        # 7. Sin ciclos ni nodos sueltos: todos alcanzables desde la raíz.
+        # 7. No cycles or disconnected nodes: all reachable from the root.
         reached = set()
         pending = [root_id] if nodes else []
         while pending:
@@ -3238,9 +3206,9 @@ class Scenario:
                 "avl", f"los nodos {unreached} no son alcanzables desde la raíz (forman un ciclo o están desconectados)"
             )
 
-        # 8. Crear los eventos (objetos nuevos) y verificar que la prioridad
-        #    guardada coincida con la calculada con las zonas del archivo
-        #    (sección 4).
+        # 8. Create events (new objects) and verify that the stored
+        #    priority matches the one computed using the file's zones
+        #    (section 4).
         def make_event(values):
             event = Event(
                 event_id=values["event_id"], magnitude=values["magnitude"], depth=values["depth"],
@@ -3260,11 +3228,10 @@ class Scenario:
         active_events = {v["event_id"]: make_event(v) for v in nodes}
         archived_events = {v["event_id"]: make_event(v) for v in archived}
 
-        # 9. Armar la topología EXACTA del archivo (sin reinsertar) con
-        #    AVLTree.restore_topology y revisarla con AVLTree.audit: orden
-        #    global por K contra todos los ancestros (equivale a que el
-        #    inorden salga ordenado), unicidad, punteros parent, alturas
-        #    guardadas contra reales.
+        # 9. Build the EXACT topology from the file (without reinserting) with
+        #    AVLTree.restore_topology and inspect it with AVLTree.audit: global
+        #    order by K against all ancestors (equivalent to inorder traversal
+        #    being sorted), uniqueness, parent pointers, stored vs real heights.
         avl_nodes = {event_id: AVLNode(event, height=by_id[event_id]["height"])
                     for event_id, event in active_events.items()}
         links = []
@@ -3289,8 +3256,8 @@ class Scenario:
             where = by_id[first["event_id"]]["where"] if first["event_id"] in by_id else "avl"
             raise self._load_error(where, f"{first['type']}: {first['detail']}")
 
-        # 10. Factor de balance guardado contra el real (las alturas ya
-        #     se verificaron en el paso 9, así que node.balance_factor es el real).
+        # 10. Stored vs real balance factor (heights were already verified
+        #     in step 9, so node.balance_factor is the real one).
         for values in nodes:
             real = avl_nodes[values["event_id"]].balance_factor
             if values["balance_factor"] != real:
@@ -3298,9 +3265,9 @@ class Scenario:
                     values["where"], f"factor de balance guardado {values['balance_factor']}, real {real}"
                 )
 
-        # 11. Balance y modo. Ordenada y balanceada: se carga (en el modo
-        #     del archivo, o el actual si no lo trae). Ordenada pero
-        #     desbalanceada: solo con el modo estrés ACTIVADO, y se avisa.
+        # 11. Balance and mode. Sorted and balanced: loaded (in the file's
+        #     mode, or current if omitted). Sorted but unbalanced:
+        #     only with STRESS mode ENABLED, issuing a warning.
         file_mode = None
         if "mode" in data:
             try:
@@ -3309,10 +3276,10 @@ class Scenario:
                 raise self._load_error("mode", f"debe ser 'Normal' o 'Stress' (llegó {data['mode']!r})") from None
         unbalanced = [node.event.event_id for node in tree.unbalanced_nodes()]
         if unbalanced:
-            # Una versión guardada en modo estrés trae su propio modo: al
-            # restaurarla se recupera tal cual (sección 13), aunque el
-            # escenario actual esté en Normal. Un archivo cualquiera sigue
-            # exigiendo el modo estrés activado (sección 12).
+            # A version saved in stress mode brings its own mode: restoring
+            # it recovers it as is (section 13), even if the current
+            # scenario is in Normal. An arbitrary file still requires
+            # stress mode to be enabled (section 12).
             stress_allowed = (
                 self.mode == Mode.STRESS
                 or (from_version and file_mode == Mode.STRESS)
@@ -3331,7 +3298,7 @@ class Scenario:
         else:
             new_mode = file_mode if file_mode is not None else self.mode
 
-        # 12. Cola de reportes, en su orden original.
+        # 12. Report queue, in its original order.
         queue = Queue()
         for i, raw in enumerate(queue_raw):
             where = f"report_queue[{i}]"
@@ -3343,10 +3310,10 @@ class Scenario:
             queue.enqueue(Report(values["event_id"], revision, stations[station_id], values["magnitude"],
                                 values["depth"], values["x"], values["y"], values["occurred_at"]))
 
-        # Construcción final en un Scenario TEMPORAL, para reconstruir las
-        # asociaciones con la misma política determinista de siempre.
-        # El BST se arma insertando en preorden del AVL: así queda con la
-        # misma forma que la topología cargada.
+        # Final construction in a TEMPORARY Scenario to rebuild
+        # associations with the usual deterministic policy.
+        # BST is built by inserting in AVL preorder: this preserves
+        # the same shape as the loaded topology.
         bst = BSTTree()
         for event in tree.preorder():
             bst.insert(event)
@@ -3362,8 +3329,8 @@ class Scenario:
         for event in temp._all_active_and_archived_events():
             temp._recalculate_reference(event)
 
-        # 13. Si el archivo guardó las referencias, deben coincidir con las
-        #     reconstruidas (los valores derivados se verifican al cargar).
+        # 13. If the file stored references, they must match the
+        #     reconstructed ones (derived values are verified upon loading).
         for values in nodes + archived:
             if "reference_id" in values["raw"]:
                 event = temp._find_any_event(values["event_id"])
@@ -3376,8 +3343,8 @@ class Scenario:
         return temp._snapshot_full_state(), warnings
 
     def _load_metrics(self, data: dict) -> dict:
-        """AUXILIAR: métricas acumuladas del archivo (enteros >= 0). Las de
-        rotación que falten las completa AVLTree en 0."""
+        """HELPER: accumulated metrics from the file (integers >= 0). Missing
+        rotation metrics are filled with 0 by AVLTree."""
         metrics = data.get("metrics", {})
         if not isinstance(metrics, dict):
             raise self._load_error("metrics", "debe ser un objeto")
@@ -3470,20 +3437,20 @@ class Scenario:
     """============TREE STATE (VISTAS)================"""
     """==============================================="""
 
-    # Fotos de solo lectura de los árboles para la interfaz (vista del AVL,
-    # vista comparativa con el BST, sección 11 y 15). Devuelven diccionarios
-    # con datos simples (números, textos, listas, None), listos para JSON.
+    # Read-only tree snapshots for the UI (AVL view, comparative view
+    # with BST, sections 11 and 15). Returns dictionaries with simple
+    # data (numbers, strings, lists, None), ready for JSON.
     #
-    # Topología PLANA: root_id + una lista de nodos donde cada nodo nombra a
-    # sus vecinos por id (left_id, right_id, parent_id). Es la misma idea del
-    # esquema de carga por topología (sección 12), y evita anidar nodos.
+    # FLAT topology: root_id + a list of nodes where each node references
+    # its neighbors by id (left_id, right_id, parent_id). Same design as
+    # the topology load schema (section 12), avoiding nested nodes.
     #
-    # Cada nodo lleva solo lo necesario para dibujarlo; el detalle completo
-    # del evento (estaciones, revisión, asociaciones) se pide con get_event(id).
-    # La auditoría NO va aquí: es una operación aparte (avl_tree.audit()).
+    # Each node carries only what is needed to render it; full event
+    # details (stations, revision, associations) are requested via get_event(id).
+    # Tree audit does NOT go here: it is a separate operation (avl_tree.audit()).
 
     def get_avl_state(self) -> dict:
-        """Estado actual del AVL activo. Costo O(n)."""
+        """Current state of the active AVL. Cost O(n)."""
         tree = self.avl_tree
         nodes = []
         self._collect_avl_rows(tree.root, None, 0, nodes)
@@ -3504,10 +3471,10 @@ class Scenario:
         }
 
     def _collect_avl_rows(self, node, parent_id, depth, rows):
-        """AUXILIAR: preorden recursivo que arma una fila por nodo del AVL.
-        La profundidad se lleva como parámetro al bajar (O(1) por nodo), en
-        vez de llamar depth_of() en cada nodo (O(profundidad) cada vez).
-        Altura y factor de balance se LEEN del nodo: el AVL los guarda."""
+        """HELPER: recursive preorder building a row per AVL node.
+        Depth is passed down as a parameter (O(1) per node), rather than
+        calling depth_of() on each node (O(depth) each time).
+        Height and balance factor are READ from the node: AVL stores them."""
         if node is None:
             return
         row = self._event_row(node.event)
@@ -3518,7 +3485,7 @@ class Scenario:
             "depth": depth,
             "height": node.height,
             "balance_factor": node.balance_factor,
-            "search_cost": depth + 1,  # nodos visitados al buscarlo por clave (sección 9)
+            "search_cost": depth + 1,  # visited nodes when searching by key (section 9)
             "costly_access": node.event.priority == 3 and depth > self.L,
         })
         rows.append(row)
@@ -3526,9 +3493,9 @@ class Scenario:
         self._collect_avl_rows(node.right_son, row["event_id"], depth + 1, rows)
 
     def get_bst_state(self) -> dict:
-        """Estado actual del BST de comparación, con la misma forma que
-        get_avl_state para poder dibujarlos y compararlos igual. El BST no
-        guarda altura ni padre: se calculan durante el recorrido. Costo O(n)."""
+        """Current state of the comparison BST, with the same shape as
+        get_avl_state to render and compare them identically. BST does
+        not store height or parent: calculated during traversal. Cost O(n)."""
         tree = self.bst_tree
         nodes = []
         height = self._collect_bst_rows(tree.root, None, 0, nodes)
@@ -3543,9 +3510,9 @@ class Scenario:
         }
 
     def _collect_bst_rows(self, node, parent_id, depth, rows):
-        """AUXILIAR: agrega la fila al BAJAR (así la lista queda en preorden)
-        y completa altura y factor al REGRESAR de los hijos (como un
-        postorden). Devuelve la altura del subárbol (vacío = -1)."""
+        """HELPER: adds the row when DESCENDING (so the list is in preorder)
+        and populates height and factor when RETURNING from children (like
+        postorder). Returns subtree height (empty = -1)."""
         if node is None:
             return -1
         row = self._event_row(node.event)
@@ -3560,12 +3527,12 @@ class Scenario:
         left_h = self._collect_bst_rows(node.left_son, row["event_id"], depth + 1, rows)
         right_h = self._collect_bst_rows(node.right_son, row["event_id"], depth + 1, rows)
         row["height"] = 1 + max(left_h, right_h)
-        row["balance_factor"] = left_h - right_h  # informativo: el BST nunca rota
+        row["balance_factor"] = left_h - right_h  # informative: BST never rotates
         return row["height"]
 
     @staticmethod
     def _event_row(event) -> dict:
-        """AUXILIAR: datos del evento que se necesitan para dibujar su nodo."""
+        """HELPER: event data needed to render its node."""
         p, m, i = event.key
         return {
             "event_id": i,
@@ -3578,7 +3545,7 @@ class Scenario:
 
     @staticmethod
     def _traversal_ids(tree) -> dict:
-        """AUXILIAR: recorridos del árbol como listas de ids (no de Event)."""
+        """HELPER: tree traversals as lists of ids (not of Event)."""
         return {
             "inorder": [e.event_id for e in tree.inorder()],
             "preorder": [e.event_id for e in tree.preorder()],

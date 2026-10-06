@@ -28,13 +28,13 @@ class EventResponse(BaseModel):
 
 
 class EventCorrection(BaseModel):
-    """Corrección manual de un evento activo (PATCH /events/{id}).
+    """Manual correction of an active event (PATCH /events/{id}).
 
-    Todos los campos son opcionales: solo se cambia lo que se envía. Mismos
-    rangos y formatos que ReportCreate (un decimal, fecha con zona horaria y
-    precisión de segundos, normalizada a UTC). El id no se corrige: es
-    inmutable. Que la fecha no sea posterior al reloj lo valida Scenario,
-    porque depende del estado."""
+    All fields are optional: only what is sent is changed. Same
+    ranges and formats as ReportCreate (one decimal, date with timezone and
+    seconds precision, normalized to UTC). The id is not corrected: it is
+    immutable. That the date is not after the clock is validated by Scenario,
+    because it depends on the state."""
 
     magnitude: float | None = Field(default=None, ge=-2.0, le=10.0, allow_inf_nan=False)
     depth: float | None = Field(default=None, ge=0.0, le=700.0, allow_inf_nan=False)
@@ -45,8 +45,8 @@ class EventCorrection(BaseModel):
     @field_validator("magnitude", "depth", "x", "y", "occurred_at", mode="before")
     @classmethod
     def reject_null_values(cls, value):
-        # Mismo criterio que ParameterUpdate: un campo enviado como null es
-        # un error; para no cambiarlo basta con no enviarlo.
+        # Same criteria as ParameterUpdate: a field sent as null is
+        # an error; to not change it, just do not send it.
         if value is None:
             raise ValueError("Correction values cannot be null")
         return value

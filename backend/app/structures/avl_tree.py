@@ -1,26 +1,26 @@
 from datetime import timedelta
 from app.structures.avl_node import AVLNode
 
-# Claves de las métricas de rotación que exige la sección 14 del enunciado.
-# Son las mismas claves que usa Scenario.metrics.
+# Keys of the rotation metrics required by section 14 of the specification.
+# These are the same keys used by Scenario.metrics.
 ROTATION_METRIC_KEYS = ("LL", "RR", "LR", "RL", "simple_left", "simple_right")
 
 
 class AVLTopologySnapshot:
-    """Copia de la FORMA del árbol en un momento dado, para poder
-    deshacer una acción que la cambió (sección 13: al deshacer se recupera
-    el estado exacto, incluida la topología).
+    """Snapshot of tree SHAPE at a given moment, to be able to
+    undo an action that changed it (section 13: undo restores
+    the exact state, including topology).
 
-    No copia eventos ni crea nodos nuevos: guarda, para cada nodo que
-    existía, a qué nodos apuntaban sus enlaces y cuál era su altura. Como
-    se conservan los mismos objetos AVLNode, Scenario.event_index (id ->
-    AVLNode) sigue siendo válido después de restaurar.
+    Does not copy events or create new nodes: saves, for each node that
+    existed, which nodes its links pointed to and what its height was. Since
+    the same AVLNode objects are retained, Scenario.event_index (id ->
+    AVLNode) remains valid after restoration.
 
-    - root: nodo que era la raíz (o None si el árbol estaba vacío).
-    - size: cantidad de nodos en ese momento.
-    - links: lista de tuplas (nodo, left_son, right_son, parent, height).
+    - root: node that was the root (or None if the tree was empty).
+    - size: number of nodes at that moment.
+    - links: list of tuples (node, left_son, right_son, parent, height).
 
-    Memoria: O(n) referencias (5 por nodo), no copias de eventos.
+    Memory: O(n) references (5 per node), no event copies.
     """
 
     def __init__(self, root, size, links):
@@ -30,103 +30,103 @@ class AVLTopologySnapshot:
 
 
 class AVLTree:
-    """Árbol AVL de eventos activos, ordenado por la clave K = (P, M, I).
+    """AVL tree of active events, ordered by key K = (P, M, I).
 
-    Comparación de claves: `Event.key` es la tupla (prioridad, magnitud,
-    identificador). Python compara tuplas de forma lexicográfica, que es
-    exactamente la regla de la sección 5, así que se usa `<` / `>` directo.
+    Key comparison: `Event.key` is the tuple (priority, magnitude,
+    identifier). Python compares tuples lexicographically, which is
+    exactly the rule from section 5, so direct `<` / `>` is used.
 
-    Implementación recursiva: cada función recursiva recibe la raíz de un
-    subárbol y DEVUELVE la raíz (posiblemente nueva, si hubo rotación) de
-    ese subárbol; quien la llamó la vuelve a enganchar como hijo. Además se
-    mantiene el puntero `parent` de cada nodo con `_set_left`/`_set_right`,
-    para poder calcular profundidades y saber de quién cuelga cada nodo.
+    Recursive implementation: each recursive function receives the root of a
+    subtree and RETURNS the (possibly new, if rotated) root of
+    that subtree; the caller reattaches it as a child. Additionally,
+    the `parent` pointer of each node is maintained with `_set_left`/`_set_right`,
+    to compute depths and know which node each one hangs from.
 
-    Modo normal / modo estrés: el árbol no guarda el modo (eso vive en
-    Scenario.mode, para no duplicar estado). Las operaciones reciben el
-    parámetro `balance`: con True se rota como en un AVL normal; con False
-    (modo estrés) se conserva el orden BST y se actualizan las alturas,
-    pero no se rota. Después, `recover_balance()` repara el árbol.
+    Normal mode / stress mode: the tree does not store the mode (that lives in
+    Scenario.mode to avoid duplicating state). Operations receive the
+    `balance` parameter: with True it rotates like a normal AVL; with False
+    (stress mode) it preserves BST order and updates heights,
+    but does not rotate. Afterward, `recover_balance()` repairs the tree.
 
-    Métricas de rotación: el árbol recibe el diccionario de métricas de
-    Scenario (el mismo objeto, no una copia) y suma ahí directamente, así
-    que hay una sola fuente de verdad. Además, cada operación pública deja
-    en `last_rotations` el detalle de las rotaciones que produjo, para
-    mostrarlas en la interfaz (sección 8) y para poder revertir las
-    métricas al deshacer esa acción (sección 14).
+    Rotation metrics: the tree receives Scenario's metrics dictionary
+    (the same object, not a copy) and increments there directly, so
+    there is a single source of truth. Furthermore, each public operation leaves
+    the detail of rotations produced in `last_rotations`, to
+    display them in the interface (section 8) and to be able to revert
+    metrics when undoing that action (section 14).
     """
 
     def __init__(self, metrics=None):
         self.root = None
         self._size = 0
-        # Si Scenario pasa su diccionario, se comparte; si no, se crea uno propio.
+        # If Scenario passes its dictionary, it is shared; otherwise, a new one is created.
         self.metrics = metrics if metrics is not None else {}
         for metric_key in ROTATION_METRIC_KEYS:
             self.metrics.setdefault(metric_key, 0)
-        # Rotaciones de la última operación pública (insert, recover_balance...).
+        # Rotations of the last public operation (insert, recover_balance...).
         self.last_rotations = []
-        # Diario de rotaciones de una operación COMPUESTA de Scenario (por
-        # ejemplo una corrección = delete + insert, y cada una reinicia
-        # last_rotations). Scenario lo abre con [] antes de la operación y
-        # lo cierra con None después; mientras es None no se anota nada.
+        # Rotation journal for a COMPOSITE operation of Scenario (for
+        # example a correction = delete + insert, and each resets
+        # last_rotations). Scenario opens it with [] before the operation and
+        # closes it with None afterward; while it is None nothing is recorded.
         self.rotation_journal = None
 
     # ==================================================================
-    # Utilidades básicas
+    # Basic utilities
     # ==================================================================
 
     def __len__(self):
-        """Cantidad de eventos activos en el árbol. O(1)."""
+        """Number of active events in the tree. O(1)."""
         return self._size
 
     def is_empty(self):
         return self.root is None
 
     def clear(self):
-        """Vacía el árbol (por ejemplo, antes de cargar un escenario nuevo).
-        No toca las métricas: eso lo decide Scenario."""
+        """Empties the tree (for example, before loading a new scenario).
+        Does not touch metrics: Scenario decides that."""
         self.root = None
         self._size = 0
         self.last_rotations = []
 
     @staticmethod
     def _height(node):
-        """Altura de un subárbol: -1 si está vacío (sección 14)."""
+        """Height of a subtree: -1 if empty (section 14)."""
         return node.height if node is not None else -1
 
     def _update_height(self, node):
-        """Recalcula la altura de `node` a partir de la de sus hijos.
-        Solo es correcta si las alturas de los hijos ya están al día."""
+        """Recalculates height of `node` from its children's heights.
+        Only correct if children's heights are already up to date."""
         node.height = 1 + max(self._height(node.left_son), self._height(node.right_son))
 
     @staticmethod
     def _set_left(parent, child):
-        """Engancha `child` como hijo izquierdo de `parent` y actualiza el
-        puntero `parent` del hijo. Usar SIEMPRE esto (y _set_right) en vez
-        de asignar left_son directamente, para no desincronizar `parent`."""
+        """Attaches `child` as left child of `parent` and updates the
+        `parent` pointer of the child. ALWAYS use this (and _set_right) instead
+        of assigning left_son directly, to avoid desynchronizing `parent`."""
         parent.left_son = child
         if child is not None:
             child.parent = parent
 
     @staticmethod
     def _set_right(parent, child):
-        """Igual que _set_left, para el hijo derecho."""
+        """Same as _set_left, for the right child."""
         parent.right_son = child
         if child is not None:
             child.parent = parent
 
     def _set_root(self, node):
-        """Fija la raíz del árbol; la raíz nunca tiene padre."""
+        """Sets tree root; root never has a parent."""
         self.root = node
         if node is not None:
             node.parent = None
 
     # ==================================================================
-    # Rotaciones
+    # Rotations
     # ==================================================================
 
     def _rotate_right(self, node):
-        """Giro simple a la derecha sobre `node` (resuelve el caso LL).
+        """Single right rotation on `node` (solves the LL case).
 
                 node                pivot
                /    \\              /     \\
@@ -134,18 +134,18 @@ class AVLTree:
             /   \\                        /    \\
            A     B                      B      C
 
-        Devuelve `pivot`, la nueva raíz del subárbol. El orden inorden
-        (A, pivot, B, node, C) no cambia, por eso la rotación conserva el
-        orden BST. Suma 1 a la métrica `simple_right`.
+        Returns `pivot`, the new root of the subtree. The inorder traversal
+        (A, pivot, B, node, C) does not change, which is why rotation preserves
+        BST order. Adds 1 to the `simple_right` metric.
         """
         pivot = node.left_son
         old_parent = node.parent
 
-        self._set_left(node, pivot.right_son)   # B pasa a ser hijo izquierdo de node
-        self._set_right(pivot, node)            # node baja a la derecha de pivot
-        pivot.parent = old_parent               # pivot ocupa el lugar que tenía node
+        self._set_left(node, pivot.right_son)   # B becomes left child of node
+        self._set_right(pivot, node)            # node moves down to the right of pivot
+        pivot.parent = old_parent               # pivot takes the place node had
 
-        # Primero node (ahora está más abajo) y luego pivot.
+        # First node (now lower down) and then pivot.
         self._update_height(node)
         self._update_height(pivot)
 
@@ -153,8 +153,8 @@ class AVLTree:
         return pivot
 
     def _rotate_left(self, node):
-        """Giro simple a la izquierda sobre `node` (resuelve el caso RR).
-        Es el espejo de _rotate_right. Suma 1 a `simple_left`."""
+        """Single left rotation on `node` (solves the RR case).
+        Mirror of _rotate_right. Adds 1 to `simple_left`."""
         pivot = node.right_son
         old_parent = node.parent
 
@@ -169,24 +169,24 @@ class AVLTree:
         return pivot
 
     def _rebalance(self, node):
-        """Si `node` está desbalanceado (|factor| > 1), aplica el caso que
-        corresponde y devuelve la nueva raíz del subárbol. Si no lo está,
-        devuelve `node` sin tocar nada.
+        """If `node` is unbalanced (|factor| > 1), applies the corresponding
+        case and returns the new subtree root. If not,
+        returns `node` untouched.
 
-        El caso se decide con los factores de balance (no comparando claves),
-        así sirve igual para inserción, eliminación y recuperación global:
-        - factor > 1 y factor del hijo izquierdo >= 0  -> caso LL (giro derecha)
-        - factor > 1 y factor del hijo izquierdo < 0   -> caso LR (giro izquierda en el hijo + giro derecha)
-        - factor < -1 y factor del hijo derecho <= 0   -> caso RR (giro izquierda)
-        - factor < -1 y factor del hijo derecho > 0    -> caso RL (giro derecha en el hijo + giro izquierda)
+        The case is decided with balance factors (not comparing keys),
+        so it serves insertion, deletion, and global recovery equally:
+        - factor > 1 and left child factor >= 0  -> LL case (right rotation)
+        - factor > 1 and left child factor < 0   -> LR case (left rotation on child + right rotation)
+        - factor < -1 and right child factor <= 0 -> RR case (left rotation)
+        - factor < -1 and right child factor > 0  -> RL case (right rotation on child + left rotation)
 
-        Métricas (sección 14): un caso simple suma 1 al caso y 1 giro
-        elemental; un caso doble suma 1 al caso (LR o RL) y 2 giros
-        elementales. Cada caso atendido queda registrado en last_rotations.
+        Metrics (section 14): a single case adds 1 to the case and 1 elementary
+        rotation; a double case adds 1 to the case (LR or RL) and 2 elementary
+        rotations. Each handled case is recorded in last_rotations.
 
-        NOTA para la eliminación: después de retirar un nodo, basta con
-        actualizar la altura y llamar a este método en cada nodo del camino
-        de regreso (igual que hace _insert).
+        NOTE for deletion: after removing a node, it suffices to update
+        the height and call this method on each node of the return path
+        (just as _insert does).
         """
         balance = node.balance_factor
         event_id = node.event.event_id
@@ -212,10 +212,10 @@ class AVLTree:
 
         self.metrics[case] += 1
         entry = {
-            "case": case,                 # LL, RR, LR o RL
-            "event_id": event_id,         # evento del nodo que estaba desbalanceado
-            "balance_factor": balance,    # factor que tenía antes de rotar
-            "rotations": rotations,       # giros elementales aplicados, en orden
+            "case": case,                 # LL, RR, LR or RL
+            "event_id": event_id,         # event of the node that was unbalanced
+            "balance_factor": balance,    # factor it had before rotating
+            "rotations": rotations,       # elementary rotations applied, in order
         }
         self.last_rotations.append(entry)
         if self.rotation_journal is not None:
@@ -223,9 +223,9 @@ class AVLTree:
         return new_root
 
     def last_rotation_delta(self):
-        """Resume `last_rotations` en cuánto sumó la última operación a cada
-        métrica de rotación. Scenario puede guardar este diccionario en la
-        acción de la pila para restarlo al deshacer (pendiente #8)."""
+        """Summarizes `last_rotations` as what the last operation added to each
+        rotation metric. Scenario can store this dictionary in the stack
+        action to subtract it on undo."""
         delta = {metric_key: 0 for metric_key in ROTATION_METRIC_KEYS}
         for entry in self.last_rotations:
             delta[entry["case"]] += 1
@@ -234,9 +234,9 @@ class AVLTree:
         return delta
 
     def revert_rotation_metrics(self, delta):
-        """Resta un delta obtenido con last_rotation_delta(). Se usa al
-        deshacer una acción, para que las métricas vuelvan a su valor
-        anterior (la sección 14 exige que los contadores sean restaurables)."""
+        """Subtracts a delta obtained with last_rotation_delta(). Used when
+        undoing an action, so metrics return to their previous
+        value (section 14 requires counters to be restorable)."""
         for metric_key, amount in delta.items():
             self.metrics[metric_key] -= amount
 
@@ -269,25 +269,25 @@ class AVLTree:
         return node
 
     # ==================================================================
-    # Inserción
+    # Insertion
     # ==================================================================
 
     def insert(self, event, balance=True):
-        """Inserta `event` según su clave actual `event.key` y devuelve el
-        AVLNode creado (para guardarlo en Scenario.event_index).
+        """Inserts `event` according to its current key `event.key` and returns the
+        created AVLNode (to store in Scenario.event_index).
 
-        - balance=True  (modo normal): se rota donde haga falta; el árbol
-          termina siendo un AVL válido.
-        - balance=False (modo estrés): se conserva el orden BST y se
-          actualizan alturas, pero no se rota.
+        - balance=True  (normal mode): rotates where necessary; the tree
+          ends up being a valid AVL.
+        - balance=False (stress mode): preserves BST order and updates
+          heights, but does not rotate.
 
-        Lanza ValueError si ya hay un nodo con exactamente la misma clave;
-        en ese caso el árbol no se modifica. OJO: el árbol solo puede
-        detectar claves repetidas. Comprobar que el IDENTIFICADOR no exista
-        (activo, archivado o eliminado) le toca a Scenario ANTES de llamar
-        aquí, porque el mismo id podría llegar con otra clave (sección 5).
+        Raises ValueError if there is already a node with the exact same key;
+        in that case the tree is not modified. NOTE: the tree can only
+        detect duplicate keys. Checking that the IDENTIFIER does not exist
+        (active, archived, or eliminated) is Scenario's responsibility BEFORE
+        calling here, because the same id could arrive with another key (section 5).
 
-        Costo: O(log n) en modo normal; O(h) en modo estrés.
+        Cost: O(log n) in normal mode; O(h) in stress mode.
         """
         self.last_rotations = []
         new_node = AVLNode(event)
@@ -296,10 +296,10 @@ class AVLTree:
         return new_node
 
     def _insert(self, node, new_node, balance):
-        """Inserción recursiva en el subárbol `node`. Devuelve la raíz
-        (posiblemente nueva) de ese subárbol."""
+        """Recursive insertion in subtree `node`. Returns the root
+        (possibly new) of that subtree."""
         if node is None:
-            return new_node   # se encontró el hueco: el nodo nuevo es una hoja
+            return new_node   # slot found: the new node is a leaf
 
         new_key = new_node.event.key
         node_key = node.event.key
@@ -309,32 +309,32 @@ class AVLTree:
         elif new_key > node_key:
             self._set_right(node, self._insert(node.right_son, new_node, balance))
         else:
-            # Se lanza antes de modificar nada: ningún ancestro alcanza a
-            # re-enganchar hijos ni a cambiar alturas.
+            # Raised before modifying anything: no ancestor has reattached
+            # children or changed heights yet.
             raise ValueError(f"Ya existe un evento con la clave {new_key} en el AVL")
 
-        # De regreso hacia la raíz: actualizar altura y, si toca, rebalancear.
+        # On the way back to root: update height and, if needed, rebalance.
         self._update_height(node)
         if balance:
             return self._rebalance(node)
         return node
 
     # ==================================================================
-    # Eliminación  (PENDIENTE)
+    # Deletion
     # ==================================================================
 
     def minimum(self, node):
-        """Devuelve el nodo con la clave mínima del subárbol `node`: el que
-        está más a la izquierda. Para la eliminación con dos hijos se llama
-        sobre node.right_son para obtener el sucesor inorden."""
+        """Returns the node with minimum key in subtree `node`: the leftmost
+        node. For deletion with two children, called on node.right_son
+        to get the inorder successor."""
         while node.left_son is not None:
             node = node.left_son
         return node  
 
     def _delete_min(self, node, balance):
-        """Quita el nodo con la clave mínima del subárbol `node` y lo devuelve
-        ya desenganchado, junto con la nueva raíz de ese subárbol.
-        Se usa en el caso de dos hijos para mover el sucesor sin copiarlo."""
+        """Removes node with minimum key from subtree `node` and returns it
+        detached, along with the new root of that subtree.
+        Used in two-children case to move the successor without copying it."""
         if node.left_son is None:
             return node.right_son, node
 
@@ -346,9 +346,9 @@ class AVLTree:
         return node, minimum_node
 
     def delete(self, key, balance=True):
-        """metodo publico de delete, devuelve el Event
-        retirado. Lanza KeyError si no existe ningún evento con esa clave
-        (la excepción la levanta `_delete` al llegar a un subárbol vacío).
+        """Public delete method, returns the removed Event.
+        Raises KeyError if no event with that key exists
+        (exception raised by `_delete` upon reaching an empty subtree).
         """
         self.last_rotations = []
         removed = []
@@ -357,15 +357,15 @@ class AVLTree:
         return removed[0]
 
     def _delete(self, node, key, balance, removed):
-        """Elimina de este subárbol el nodo cuyo identificador es key[2] y
-        devuelve la nueva raíz de ese subárbol. Al encontrarlo, agrega su
-        Event a la lista `removed` (así `delete` no necesita volver a
-        buscarlo, y funciona igual aunque el evento haya sido corregido).
+        """Deletes from this subtree the node whose identifier is key[2] and
+        returns the new root of that subtree. When found, appends its
+        Event to the `removed` list (so `delete` does not need to search
+        again, working even if the event was corrected).
 
-        Se reconoce el nodo por su identificador (key[2]), no por igualdad de
-        clave completa: si el evento tuvo una corrección, node.event.key ya
-        devuelve la clave NUEVA aunque el nodo siga ubicado según la clave
-        VIEJA que llega aquí (Scenario llama delete(old_key) en ese caso).
+        The node is recognized by its identifier (key[2]), not by full key
+        equality: if the event had a correction, node.event.key already
+        returns the NEW key even though the node is still located according to the
+        OLD key passed here (Scenario calls delete(old_key) in that case).
         """
         if node is None:
             raise KeyError(f"No existe un evento con identificador {key[2]} en el AVL")
@@ -399,16 +399,16 @@ class AVLTree:
             return self._rebalance(node)
         return node
     # ==================================================================
-    # Búsqueda y profundidad
+    # Search and depth
     # ==================================================================
 
     def search(self, key):
-        """Busca el nodo con clave exactamente `key` = (P, M, I).
-        Devuelve (nodo_o_None, nodos_visitados).
+        """Searches for the node with key exactly `key` = (P, M, I).
+        Returns (node_or_None, visited_nodes).
 
-        `nodos_visitados` es el costo simulado de la sección 9: para un
-        evento existente es su profundidad + 1. También sirve para la
-        comparación con el BST (sección 11).
+        `visited_nodes` is the simulated cost from section 9: for an
+        existing event it is its depth + 1. Also serves for
+        comparison with the BST (section 11).
         """
         return self._search(self.root, key, 0)
 
@@ -424,18 +424,17 @@ class AVLTree:
         return self._search(node.right_son, key, visited)
 
     def depth_of(self, node):
-        """Profundidad del nodo (sección 9): raíz = 0, hijo = padre + 1.
-        Sube por los punteros `parent`. Costo: O(profundidad)."""
+        """Depth of node (section 9): root = 0, child = parent + 1.
+        Ascends along `parent` pointers. Cost: O(depth)."""
         if node.parent is None:
             return 0
         return 1 + self.depth_of(node.parent)
 
     def costly_access(self, limit):
-        """Eventos de prioridad alta (P = 3) cuya profundidad es
-        estrictamente mayor que el límite L (sección 9 y consulta de la
-        sección 11). Devuelve una lista de diccionarios con el evento, su
-        profundidad y los nodos que se visitan al buscarlo por clave
-        (profundidad + 1). Costo: O(n)."""
+        """High-priority events (P = 3) whose depth is strictly greater
+        than limit L (section 9 and query from section 11). Returns a
+        list of dictionaries with the event, its depth, and the nodes
+        visited when searching for it by key (depth + 1). Cost: O(n)."""
         result = []
         self._collect_costly(self.root, 0, limit, result)
         return result
@@ -449,16 +448,16 @@ class AVLTree:
         self._collect_costly(node.right_son, depth + 1, limit, result)
 
     # ==================================================================
-    # Métricas estructurales (secciones 11, 12 y 14)
+    # Structural metrics (sections 11, 12, and 14)
     # ==================================================================
 
     def height(self):
-        """Altura del árbol completo (vacío = -1). Es la altura guardada en
-        la raíz, O(1). La auditoría comprueba que coincida con la real."""
+        """Height of full tree (empty = -1). Stored height at
+        the root, O(1). Audit verifies it matches real height."""
         return self._height(self.root)
 
     def count_leaves(self):
-        """Cantidad de hojas. Costo: O(n)."""
+        """Number of leaves. Cost: O(n)."""
         return self._count_leaves(self.root)
 
     def _count_leaves(self, node):
@@ -469,11 +468,11 @@ class AVLTree:
         return self._count_leaves(node.left_son) + self._count_leaves(node.right_son)
 
     # ==================================================================
-    # Recorridos (sección 14). Todos devuelven listas de Event. O(n).
+    # Traversals (section 14). All return lists of Event. O(n).
     # ==================================================================
 
     def inorder(self):
-        """Izquierda, raíz, derecha: claves ASCENDENTES."""
+        """Left, root, right: ASCENDING keys."""
         result = []
         self._inorder(self.root, result)
         return result
@@ -486,9 +485,8 @@ class AVLTree:
         self._inorder(node.right_son, result)
 
     def reverse_inorder(self):
-        """Derecha, raíz, izquierda: claves DESCENDENTES. Es el recorrido
-        base para "los primeros k pendientes en orden descendente de K"
-        (sección 11)."""
+        """Right, root, left: DESCENDING keys. Base traversal for
+        "first k pending in descending order of K" (section 11)."""
         result = []
         self._reverse_inorder(self.root, result)
         return result
@@ -501,7 +499,7 @@ class AVLTree:
         self._reverse_inorder(node.left_son, result)
 
     def preorder(self):
-        """Raíz, izquierda, derecha."""
+        """Root, left, right."""
         result = []
         self._preorder(self.root, result)
         return result
@@ -514,7 +512,7 @@ class AVLTree:
         self._preorder(node.right_son, result)
 
     def postorder(self):
-        """Izquierda, derecha, raíz."""
+        """Left, right, root."""
         result = []
         self._postorder(self.root, result)
         return result
@@ -527,11 +525,10 @@ class AVLTree:
         result.append(node.event)
 
     def level_order(self):
-        """Por niveles, de arriba hacia abajo y de izquierda a derecha.
-        Versión recursiva: un recorrido preorden que va guardando cada nodo
-        en la lista de su nivel. Como el preorden visita siempre la
-        izquierda antes que la derecha, cada nivel queda de izquierda a
-        derecha. Luego se concatenan los niveles."""
+        """Level order, top to bottom and left to right.
+        Recursive version: a preorder traversal storing each node
+        in its level list. Since preorder visits left before
+        right, each level stays left to right. Then levels are concatenated."""
         levels = []
         self._collect_levels(self.root, 0, levels)
         return [event for level in levels for event in level]
@@ -546,13 +543,13 @@ class AVLTree:
         self._collect_levels(node.right_son, depth + 1, levels)
 
     # ==================================================================
-    # Modo estrés: detección de desbalance y recuperación global (sección 8)
+    # Stress mode: imbalance detection and global recovery (section 8)
     # ==================================================================
 
     def unbalanced_nodes(self):
-        """Nodos cuyo factor de balance está fuera de {-1, 0, 1}. En modo
-        estrés sirve para que la interfaz indique que el árbol dejó de
-        cumplir la condición AVL. Costo: O(n)."""
+        """Nodes whose balance factor is outside {-1, 0, 1}. In stress mode,
+        serves to indicate in the interface that tree stopped satisfying
+        the AVL condition. Cost: O(n)."""
         result = []
         self._collect_unbalanced(self.root, result)
         return result
@@ -566,40 +563,39 @@ class AVLTree:
         self._collect_unbalanced(node.right_son, result)
 
     def is_avl(self):
-        """True si ningún nodo está desbalanceado (según alturas guardadas)."""
+        """True if no node is unbalanced (according to stored heights)."""
         return len(self.unbalanced_nodes()) == 0
 
     def recover_balance(self):
-        """Recuperación global: restablece la propiedad AVL SOLO con
-        rotaciones, sin vaciar ni reconstruir el árbol (lo prohíbe la
-        sección 8). Funciona aunque haya diferencias de altura mayores que 2.
-        Devuelve la lista de rotaciones aplicadas (también queda en
-        last_rotations), que es el "costo" que se muestra en la interfaz.
+        """Global recovery: restores AVL property ONLY with
+        rotations, without emptying or rebuilding the tree (forbidden by
+        section 8). Works even with height differences greater than 2.
+        Returns list of applied rotations (also recorded in
+        last_rotations), which is the "cost" shown in the interface.
 
-        Procedimiento (_recover), de abajo hacia arriba:
-          1. Recuperar primero los dos subárboles (quedan AVL).
-          2. Mientras el nodo actual tenga |factor| > 1, aplicar el caso que
-             toca (_rebalance) y recuperar el subárbol del nodo que bajó,
-             porque puede haber quedado desbalanceado.
+        Procedure (_recover), bottom-up:
+          1. First recover both subtrees (becoming AVL).
+          2. While current node has |factor| > 1, apply corresponding case
+             (_rebalance) and recover the subtree of the demoted node,
+             since it may have become unbalanced.
 
-        Por qué conserva el orden: solo se usan rotaciones, y una rotación
-        no cambia el recorrido inorden.
+        Why it preserves order: only rotations are used, and a rotation
+        does not change inorder traversal.
 
-        Por qué termina (para sustentar en el manual técnico):
-          - Cada llamada recursiva trabaja sobre un subárbol con menos nodos
-            que el actual, así que la recursión no es infinita.
-          - Una rotación aplicada a un nodo con |factor| >= 2 (con hijos ya
-            AVL) nunca aumenta la altura de ese subárbol; por inducción,
-            recuperar un subárbol tampoco aumenta su altura.
-          - Si el nodo está cargado a la izquierda (factor >= 2), después de
-            cada caso la altura del lado izquierdo baja exactamente en 1, y
-            el lado derecho no puede superar esa nueva altura en más de 1,
-            así que el desbalance nunca "salta" al otro lado. Como la altura
-            izquierda no puede bajar indefinidamente, el ciclo termina en a
-            lo sumo tantas vueltas como la altura inicial. El caso derecho
-            es simétrico.
+        Why it terminates (to support technical documentation):
+          - Each recursive call operates on a subtree with fewer nodes
+            than current, so recursion is not infinite.
+          - A rotation applied to a node with |factor| >= 2 (with AVL children)
+            never increases the height of that subtree; by induction,
+            recovering a subtree never increases its height.
+          - If the node is left-heavy (factor >= 2), after each case the
+            left side's height decreases by exactly 1, and the right side
+            cannot exceed that new height by more than 1, so imbalance never
+            "jumps" to the other side. Since left height cannot decrease
+            indefinitely, the loop terminates in at most as many iterations
+            as the initial height. The right-heavy case is symmetric.
 
-        Costo: O(n) para recorrer el árbol más el trabajo de las rotaciones.
+        Cost: O(n) to traverse the tree plus rotation work.
         """
         self.last_rotations = []
         self._set_root(self._recover(self.root))
@@ -609,17 +605,17 @@ class AVLTree:
         if node is None:
             return None
 
-        # 1. Primero los hijos (recorrido postorden).
+        # 1. First children (postorder traversal).
         self._set_left(node, self._recover(node.left_son))
         self._set_right(node, self._recover(node.right_son))
         self._update_height(node)
 
-        # 2. Rotar en este nodo hasta que quede balanceado.
+        # 2. Rotate at this node until balanced.
         while abs(node.balance_factor) > 1:
             left_heavy = node.balance_factor > 1
             node = self._rebalance(node)
-            # El nodo desbalanceado bajó hacia el lado liviano: ese subárbol
-            # es el único que puede haber quedado desbalanceado.
+            # The unbalanced node moved down toward the lighter side: that subtree
+            # is the only one that could have become unbalanced.
             if left_heavy:
                 self._set_right(node, self._recover(node.right_son))
             else:
@@ -629,21 +625,21 @@ class AVLTree:
         return node
 
     # ==================================================================
-    # Copia de la topología (para deshacer, sección 13)
+    # Topology snapshot (for undo, section 13)
     # ==================================================================
 
     def snapshot_topology(self):
-        """Toma una copia de la forma actual del árbol (ver
-        AVLTopologySnapshot). Se llama ANTES de una acción que reorganiza
-        el árbol, por ejemplo la recuperación global, y la copia se guarda
-        en la acción de la pila de deshacer. Costo: O(n)."""
+        """Takes a snapshot of current tree shape (see
+        AVLTopologySnapshot). Called BEFORE an action reorganizing
+        the tree, for example global recovery, and the snapshot is saved
+        in the action on undo stack. Cost: O(n)."""
         links = []
         self._collect_links(self.root, links)
         return AVLTopologySnapshot(self.root, self._size, links)
 
     def _collect_links(self, node, links):
-        """Recorre el árbol en preorden guardando los enlaces y la altura
-        de cada nodo tal como están ahora."""
+        """Traverses tree in preorder saving links and height
+        of each node as they currently are."""
         if node is None:
             return
         links.append((node, node.left_son, node.right_son, node.parent, node.height))
@@ -651,16 +647,15 @@ class AVLTree:
         self._collect_links(node.right_son, links)
 
     def restore_topology(self, snapshot):
-        """Devuelve el árbol exactamente a la forma guardada en `snapshot`:
-        vuelve a poner en cada nodo los enlaces y la altura que tenía, y
-        restaura la raíz y el tamaño. Costo: O(n).
+        """Restores the tree exactly to the shape saved in `snapshot`:
+        reinstates in each node the links and height it had, and
+        restores the root and size. Cost: O(n).
 
-        Solo es correcto si, desde que se tomó la copia, no entraron ni
-        salieron nodos del árbol. La pila de deshacer lo garantiza: al
-        deshacer una acción, todas las acciones posteriores ya se
-        deshicieron antes (orden LIFO).
+        Only correct if no nodes were added or removed from tree since
+        snapshot was taken. Undo stack guarantees this: when undoing an
+        action, all subsequent actions were already undone (LIFO order).
 
-        No toca las métricas: Scenario las revierte aparte con
+        Does not touch metrics: Scenario reverts them separately with
         revert_rotation_metrics(delta)."""
         for node, left_son, right_son, parent, height in snapshot.links:
             node.left_son = left_son
@@ -672,28 +667,28 @@ class AVLTree:
         self.last_rotations = []
 
     # ==================================================================
-    # Auditoría: "Verificar estructura" (sección 14)
+    # Audit: "Verify structure" (section 14)
     # ==================================================================
 
     def audit(self, require_balance=True):
-        """Revisa TODO el árbol y devuelve una lista de problemas, uno por
-        evento inconsistente. Lista vacía = estructura correcta.
+        """Inspects the ENTIRE tree and returns a list of issues, one per
+        inconsistent event. Empty list = correct structure.
 
-        Comprueba:
-          - orden GLOBAL por K: cada nodo debe estar dentro del rango
-            (mínimo, máximo) que le imponen TODOS sus ancestros, no solo su
-            padre inmediato;
-          - unicidad de identificadores y que ningún nodo aparezca dos veces
-            (lo que indicaría un ciclo o un nodo compartido);
-          - referencias: el `parent` de cada hijo apunta a su padre real;
-          - alturas guardadas contra alturas recalculadas;
-          - factores de balance.
+        Verifies:
+          - GLOBAL order by K: each node must lie within the range
+            (minimum, maximum) imposed by ALL ancestors, not just immediate
+            parent;
+          - uniqueness of identifiers and no node appearing twice
+            (which would indicate a cycle or shared node);
+          - references: each child's `parent` points to its real parent;
+          - stored heights against recalculated heights;
+          - balance factors.
 
-        require_balance=True (modo normal): un factor fuera de {-1, 0, 1} es
-        un error. require_balance=False (modo estrés): se informa como
-        desbalance "esperado", distinto de los errores de orden o metadatos.
+        require_balance=True (normal mode): factor outside {-1, 0, 1} is
+        an error. require_balance=False (stress mode): reported as
+        "expected" imbalance, distinct from ordering or metadata errors.
 
-        Cada problema es un dict: {"event_id", "type", "severity", "detail"}.
+        Each issue is a dict: {"event_id", "type", "severity", "detail"}.
         """
         issues = []
         seen_ids = set()
@@ -713,13 +708,13 @@ class AVLTree:
         return {"event_id": node.event.event_id, "type": issue_type, "severity": severity, "detail": detail}
 
     def _audit(self, node, expected_parent, low, high, require_balance, issues, seen_ids, seen_nodes):
-        """Revisa el subárbol `node` y devuelve su altura REAL (recalculada)."""
+        """Inspects subtree `node` and returns its REAL (recalculated) height."""
         if node is None:
             return -1
 
         if id(node) in seen_nodes:
             issues.append(self._issue(node, "reference", "error", "El nodo aparece dos veces (ciclo o nodo compartido)"))
-            return -1   # no se sigue bajando, para no entrar en un ciclo
+            return -1   # stop descending to avoid infinite loop
         seen_nodes.add(id(node))
 
         event_id = node.event.event_id
@@ -753,40 +748,40 @@ class AVLTree:
         return real_height
 
     # ==================================================================
-    # Archivo masivo: subárboles elegibles (sección 10)
+    # Mass archive: eligible subtrees (section 10)
     # ==================================================================
 
     def eligible_archive_subtrees(self, clock, T):
-        """Devuelve TODOS los subárboles elegibles para archivar.
+        """Returns ALL eligible subtrees for mass archiving.
 
-        Un subárbol es elegible si todos sus eventos tienen prioridad baja
-        (P = 1) y antigüedad estrictamente mayor que T horas, donde
-        antigüedad = clock - occurred_at. Una hoja también es un subárbol.
+        A subtree is eligible if all its events have low priority
+        (P = 1) and age strictly greater than T hours, where
+        age = clock - occurred_at. A leaf is also a subtree.
 
-        El árbol no conoce el reloj ni T (viven en Scenario), por eso los
-        recibe como parámetros, igual que `balance` en insert/delete.
+        The tree does not know clock or T (they live in Scenario), which is why
+        it receives them as parameters, just like `balance` in insert/delete.
 
-        Devuelve una lista de dicts, uno por subárbol elegible:
+        Returns a list of dicts, one per eligible subtree:
             {"root": AVLNode, "root_id": int, "size": int, "depth": int}
-        con lo necesario para el desempate (tamaño, profundidad de la raíz,
-        id de la raíz), que lo hace Scenario. Lista vacía = no hay ramas
-        elegibles. Incluye también los subárboles anidados dentro de otro
-        elegible (al desempatar por tamaño nunca gana uno anidado).
-        Costo: O(n), un solo recorrido."""
+        with everything needed for tie-breaking (size, root depth,
+        root id), handled by Scenario. Empty list = no eligible branches.
+        Also includes subtrees nested within another eligible one (in tie-breaking
+        by size, a nested one never wins).
+        Cost: O(n), single traversal."""
         result = []
         self._collect_eligible(self.root, 0, clock, timedelta(hours=T), result)
         return result
 
     def _collect_eligible(self, node, depth, clock, min_age, result):
-        """Recorrido POSTORDEN: primero los hijos, luego el nodo, porque un
-        nodo solo sabe si su subárbol es elegible cuando ya sabe si lo son
-        los de sus hijos. Devuelve (subárbol_elegible, tamaño_del_subárbol).
+        """POSTORDER traversal: first children, then node, because a
+        node only knows if its subtree is eligible once it knows if its
+        children's subtrees are. Returns (eligible_subtree, subtree_size).
 
-        - Un subárbol vacío cuenta como elegible ("todos sus eventos
-          cumplen" es cierto si no hay eventos); así una hoja es elegible
-          si ella misma cumple.
-        - SIEMPRE se recorren los dos hijos, aunque este nodo no cumpla:
-          dentro de una rama no elegible puede haber subárboles elegibles."""
+        - An empty subtree counts as eligible ("all its events satisfy"
+          is true if there are no events); thus a leaf is eligible
+          if it satisfies the condition itself.
+        - ALWAYS traverse both children even if this node does not qualify:
+          within an ineligible branch there may be eligible subtrees."""
         if node is None:
             return True, 0
 
@@ -803,9 +798,9 @@ class AVLTree:
         return eligible, size
 
     def subtree_event_ids(self, node):
-        """Ids de todos los eventos del subárbol que empieza en `node`
-        (inorden). Sirve para fijar el conjunto a archivar ANTES de
-        modificar el árbol y mostrarlo al usuario. Costo: O(tamaño)."""
+        """Ids of all events in the subtree starting at `node`
+        (inorder). Serves to fix the archive set BEFORE modifying
+        the tree and displaying it to user. Cost: O(size)."""
         ids = []
         self._collect_subtree_ids(node, ids)
         return ids
@@ -818,7 +813,7 @@ class AVLTree:
         self._collect_subtree_ids(node.right_son, ids)
 
     def _count_nodes(self, node):
-        """Cuenta los nodos de un subárbol. O(n)."""
+        """Counts nodes of a subtree. O(n)."""
         if node is None:
             return 0
         return 1 + self._count_nodes(node.left_son) + self._count_nodes(node.right_son)
@@ -905,8 +900,8 @@ class AVLTree:
         return node, former_parent, was_left_child
 
     def subtree_events(self, node):
-        """Eventos del subárbol que empieza en `node`, en postorden.
-        Costo: O(tamaño del subárbol)."""
+        """Events of subtree starting at `node`, in postorder.
+        Cost: O(subtree size)."""
         events = []
         self._collect_subtree_events(node, events)
         return events
@@ -960,9 +955,9 @@ class AVLTree:
             current = parent_of_current
 
     def subtree_nodes(self, node):
-        """Lista de nodos del subárbol que empieza en `node` (preorden).
-        Análogo a subtree_events pero devuelve AVLNode, no Event.
-        Se usa en _undo_mass_archive para volver a llenar event_index."""
+        """List of nodes of the subtree starting at `node` (preorder).
+        Analogous to subtree_events but returns AVLNode, not Event.
+        Used in _undo_mass_archive to refill event_index."""
         nodes = []
         self._collect_subtree_nodes(node, nodes)
         return nodes

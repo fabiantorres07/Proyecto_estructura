@@ -2,54 +2,43 @@ from app.structures.bst_node import BSTNode
 
 
 class BSTTree:
-    """Árbol binario de búsqueda SIN balanceo, usado como árbol de
-    comparación frente al AVL (secciones 11 y 12 del enunciado).
+    """Binary search tree WITHOUT balancing, used as comparison tree
+    against the AVL (sections 11 and 12).
 
-    Decisión de diseño (acordada con el equipo): este árbol se mantiene
-    VIVO y sincronizado con el AVL durante toda la simulación. Cada vez que
-    Scenario inserta un evento en el AVL, también lo inserta aquí; cada vez
-    que lo retira del AVL (eliminación, corrección que cambia la clave,
-    archivo masivo), también lo retira aquí. Así ambos árboles contienen
-    siempre el mismo conjunto de eventos activos y la comparación de
-    altura, hojas y comparaciones de búsqueda vale en cualquier momento.
+    Design decision: this tree is kept ALIVE and synchronized
+    with the AVL throughout the simulation. Every time Scenario inserts an event
+    in the AVL, it also inserts it here; every time it removes it from the AVL
+    (deletion, correction changing key, massive archive), it also removes it here.
+    This way both trees always contain the same set of active events.
 
-    La única diferencia con el AVL es que aquí NUNCA se rota: la forma del
-    árbol depende solo del orden de las operaciones. Eso es lo que se mide.
+    The only difference with the AVL is that this NEVER rotates.
 
-    Comparación de claves: `Event.key` es la tupla K = (P, M, I). Python
-    compara tuplas de forma lexicográfica (primero P, luego M, luego I),
-    que es exactamente la regla de la sección 5.
+    Key comparison: `Event.key` is the tuple K = (P, M, I). Python compares
+    tuples lexicographically.
 
-    Implementación recursiva (pedida por el profesor): cada función
-    recursiva recibe la raíz de un subárbol y, cuando modifica el árbol,
-    devuelve la raíz (posiblemente nueva) de ese subárbol para que quien la
-    llamó la vuelva a enganchar. Límite conocido: si el árbol degenera en
-    una "lista" (inserciones en orden ascendente), la profundidad de la
-    recursión es igual a la cantidad de nodos; Python permite unos 1000
-    niveles, y el proyecto no espera más de ~100 eventos, así que no hay
-    riesgo. Conviene mencionarlo en el análisis de costos del manual.
+    Recursive implementation: each recursive function receives the root of a subtree
+    and, when modifying the tree, returns the (possibly new) root of that subtree.
     """
 
     def __init__(self):
-        self.root = None   # Raíz (BSTNode) o None si el árbol está vacío.
-        self._size = 0     # Cantidad de nodos, mantenida en insert/delete.
+        self.root = None   # Root (BSTNode) or None if tree is empty.
+        self._size = 0     # Number of nodes, maintained in insert/delete.
 
     # ------------------------------------------------------------------
     # Consultas básicas
     # ------------------------------------------------------------------
 
     def __len__(self):
-        """Cantidad de eventos en el árbol. O(1)."""
+        """Number of events in the tree. O(1)."""
         return self._size
 
     def is_empty(self):
         return self.root is None
 
     def clear(self):
-        """Vacía el árbol. Se usa cuando se reemplaza el escenario completo
-        (carga de archivo, restauración de versión): el BST no forma parte
-        del estado exportado (la sección 12 solo pide la topología del AVL),
-        así que en esos casos se reconstruye con clear() + insert()."""
+        """Empties the tree. Used when replacing the complete scenario
+        (loading file, restoring version): the BST is not part
+        of the exported state, so it is reconstructed with clear() + insert()."""
         self.root = None
         self._size = 0
 
@@ -58,23 +47,21 @@ class BSTTree:
     # ------------------------------------------------------------------
 
     def insert(self, event):
-        """Inserta `event` según su clave actual `event.key`: clave menor a
-        la izquierda, mayor a la derecha, hasta llegar a un hueco (None).
-        No hay rebalanceo.
+        """Inserts `event` according to its current key `event.key`: smaller key
+        to the left, larger to the right, until finding a gap (None).
+        No rebalancing.
 
-        Lanza ValueError si ya existe un nodo con la misma clave (solo puede
-        pasar si se inserta dos veces el mismo evento, porque el id forma
-        parte de K); en ese caso el árbol no se modifica.
+        Raises ValueError if a node with the same key already exists.
 
-        Costo: O(h), con h la altura actual (O(n) en el peor caso).
+        Cost: O(h), with h being the current height.
         """
         self.root = self._insert(self.root, event)
         self._size += 1
 
     def _insert(self, node, event):
-        """Inserta en el subárbol `node` y devuelve la raíz del subárbol."""
+        """Inserts into the `node` subtree and returns the subtree root."""
         if node is None:
-            return BSTNode(event)   # hueco encontrado: el nuevo nodo es una hoja
+            return BSTNode(event)   # gap found: the new node is a leaf
 
         key = event.key
         node_key = node.event.key
@@ -83,7 +70,7 @@ class BSTTree:
         elif key > node_key:
             node.right_son = self._insert(node.right_son, event)
         else:
-            raise ValueError(f"Ya existe un evento con la clave {key} en el BST")
+            raise ValueError(f"An event with key {key} already exists in the BST")
         return node
 
     # ------------------------------------------------------------------
@@ -91,13 +78,11 @@ class BSTTree:
     # ------------------------------------------------------------------
 
     def search(self, key):
-        """Busca el nodo con clave exactamente `key` = (P, M, I).
-        Devuelve (nodo_o_None, nodos_visitados).
+        """Searches for the node with exact `key` = (P, M, I).
+        Returns (node_or_None, visited_nodes).
 
-        `nodos_visitados` es el dato de la sección 11 para comparar el costo
-        de búsqueda entre AVL y BST: cada nodo contra el que se compara la
-        clave cuenta como una visita. Si el evento existe, es igual a su
-        profundidad + 1. Costo: O(h).
+        `visited_nodes` is the data from section 11 to compare search cost
+        between AVL and BST. Cost: O(h).
         """
         return self._search(self.root, key, 0)
 
@@ -117,71 +102,62 @@ class BSTTree:
     # ------------------------------------------------------------------
 
     def delete(self, key):
-        """Retira el evento ubicado con la clave `key` y lo devuelve.
-        Lanza KeyError si no está (y el árbol no se modifica).
+        """Removes the event located with `key` and returns it.
+        Raises KeyError if not found (tree is not modified).
 
-        IMPORTANTE: `key` es la clave con la que el evento fue INSERTADO.
-        En una corrección, el Event se modifica en el mismo objeto y su
-        `event.key` ya devuelve la clave nueva, pero el nodo sigue ubicado
-        según la vieja. Por eso se navega con `key` y el nodo buscado se
-        reconoce por su identificador (key[2]), que nunca cambia.
-        Flujo esperado en Scenario para una corrección:
-            old_key, new_key = event.apply_correction(...)
-            bst_tree.delete(old_key)
-            bst_tree.insert(event)      # se reubica con la clave nueva
+        IMPORTANT: `key` is the key with which the event was INSERTED.
+        In a correction, the Event is modified and `event.key` returns the new key,
+        but the node is still located by the old one. We navigate with `key` and 
+        recognize it by ID (key[2]).
 
-        Costo: O(h).
+        Cost: O(h).
         """
         new_root, removed = self._delete(self.root, key)
         if removed is None:
-            raise KeyError(f"No existe en el BST un evento con la clave {key}")
+            raise KeyError(f"An event with key {key} does not exist in the BST")
         self.root = new_root
         self._size -= 1
         return removed.event
 
     def _delete(self, node, key):
-        """Elimina en el subárbol `node`. Devuelve una tupla
-        (nueva_raíz_del_subárbol, nodo_retirado_o_None).
+        """Deletes in the `node` subtree. Returns a tuple
+        (new_subtree_root, removed_node_or_None).
 
-        Los tres casos clásicos:
-        1. Hoja: el subárbol queda vacío (se devuelve None).
-        2. Un solo hijo: ese hijo ocupa el lugar del nodo.
-        3. Dos hijos: el sucesor inorden (mínimo del subárbol derecho) ocupa
-           el lugar del nodo. Se mueve el NODO sucesor completo en vez de
-           copiar su evento, para que cada evento siga en su propio nodo.
+        Three classic cases:
+        1. Leaf: subtree becomes empty (returns None).
+        2. One child: that child takes the node's place.
+        3. Two children: inorder successor takes the node's place.
         """
         if node is None:
-            return None, None   # no se encontró
+            return None, None   # not found
 
         if node.event.event_id != key[2]:
-            # Todavía no es el nodo buscado: bajar por el lado que indica la clave.
+            # Not the node yet: go down according to the key.
             if key < node.event.key:
                 node.left_son, removed = self._delete(node.left_son, key)
             else:
                 node.right_son, removed = self._delete(node.right_son, key)
             return node, removed
 
-        # Se encontró el nodo a retirar.
-        if node.left_son is None:          # casos 1 y 2 (sin hijo izquierdo)
+        # Found the node to remove.
+        if node.left_son is None:          # cases 1 and 2 (no left child)
             replacement = node.right_son
-        elif node.right_son is None:       # caso 2 (solo hijo izquierdo)
+        elif node.right_son is None:       # case 2 (only left child)
             replacement = node.left_son
-        else:                              # caso 3: dos hijos
+        else:                              # case 3: two children
             new_right, successor = self._detach_minimum(node.right_son)
             successor.left_son = node.left_son
             successor.right_son = new_right
             replacement = successor
 
-        # Soltar los enlaces del nodo retirado.
+        # Release links from removed node.
         node.left_son = None
         node.right_son = None
         return replacement, node
 
     def _detach_minimum(self, node):
-        """Separa el nodo mínimo (el de más a la izquierda) del subárbol
-        `node`. Devuelve (nueva_raíz_del_subárbol, nodo_mínimo).
-        El mínimo nunca tiene hijo izquierdo, así que su hijo derecho sube
-        a ocupar su lugar."""
+        """Separates the minimum node from the `node` subtree.
+        Returns (new_subtree_root, minimum_node)."""
         if node.left_son is None:
             return node.right_son, node
         node.left_son, minimum = self._detach_minimum(node.left_son)
@@ -192,10 +168,7 @@ class BSTTree:
     # ------------------------------------------------------------------
 
     def snapshot_topology(self):
-        """Copia de la FORMA del BST, igual que AVLTree.snapshot_topology:
-        por cada nodo guarda a qué nodos apuntaban sus enlaces. No copia
-        eventos ni crea nodos. Devuelve (raíz, tamaño, enlaces), con enlaces
-        = lista de (nodo, left_son, right_son). Costo y memoria: O(n)."""
+        """Topology snapshot of the BST. Returns (root, size, links)."""
         links = []
         self._collect_links(self.root, links)
         return (self.root, self._size, links)
@@ -208,9 +181,7 @@ class BSTTree:
         self._collect_links(node.right_son, links)
 
     def restore_topology(self, snapshot):
-        """Devuelve el BST exactamente a la forma de `snapshot`. Solo es
-        correcto si desde la copia no se hicieron otras modificaciones que
-        sigan vigentes; la pila de deshacer (LIFO) lo garantiza. O(n)."""
+        """Restores the BST exactly to the `snapshot` shape. O(n)."""
         root, size, links = snapshot
         for node, left_son, right_son in links:
             node.left_son = left_son
@@ -223,9 +194,7 @@ class BSTTree:
     # ------------------------------------------------------------------
 
     def height(self):
-        """Altura del árbol con la convención de la sección 14: vacío = -1,
-        hoja = 0. Coincide con la profundidad máxima que pide mostrar la
-        sección 12. Se calcula bajo demanda: O(n)."""
+        """Height of the tree: empty = -1, leaf = 0. Calculated on demand: O(n)."""
         return self._height(self.root)
 
     def _height(self, node):
@@ -234,7 +203,7 @@ class BSTTree:
         return 1 + max(self._height(node.left_son), self._height(node.right_son))
 
     def count_leaves(self):
-        """Cantidad de hojas (nodos sin hijos). O(n)."""
+        """Number of leaves (nodes without children). O(n)."""
         return self._count_leaves(self.root)
 
     def _count_leaves(self, node):
@@ -250,8 +219,7 @@ class BSTTree:
     # ------------------------------------------------------------------
 
     def inorder(self):
-        """Izquierda, raíz, derecha: eventos en orden ASCENDENTE de K. Si el
-        árbol está bien construido, esta lista siempre sale ordenada."""
+        """Left, root, right: events in ASCENDING order of K."""
         result = []
         self._inorder(self.root, result)
         return result
@@ -264,7 +232,7 @@ class BSTTree:
         self._inorder(node.right_son, result)
 
     def preorder(self):
-        """Raíz, izquierda, derecha."""
+        """Root, left, right."""
         result = []
         self._preorder(self.root, result)
         return result
@@ -277,7 +245,7 @@ class BSTTree:
         self._preorder(node.right_son, result)
 
     def postorder(self):
-        """Izquierda, derecha, raíz."""
+        """Left, right, root."""
         result = []
         self._postorder(self.root, result)
         return result
@@ -290,10 +258,7 @@ class BSTTree:
         result.append(node.event)
 
     def level_order(self):
-        """Por niveles, de arriba hacia abajo y de izquierda a derecha.
-        Versión recursiva: un recorrido preorden que guarda cada nodo en la
-        lista de su nivel; como el preorden visita la izquierda antes que la
-        derecha, cada nivel queda de izquierda a derecha."""
+        """Level order traversal, top to bottom, left to right."""
         levels = []
         self._collect_levels(self.root, 0, levels)
         return [event for level in levels for event in level]

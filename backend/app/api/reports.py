@@ -15,11 +15,11 @@ from app.schemas.report import (
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
-# Endpoints de la cola de reportes (sección 8). Solo preparan y muestran
-# reportes; procesarlos (POST /reports/process-next, etc.) se agregará
-# cuando Scenario tenga la creación y corrección de eventos.
-# No hay DELETE /reports/{...}: por decisión del equipo un reporte
-# encolado no se puede quitar individualmente, solo vaciar toda la cola.
+# Report queue endpoints (section 8). They only prepare and show
+# reports; processing them (POST /reports/process-next, etc.) will be added
+# when Scenario has event creation and correction.
+# There is no DELETE /reports/{...}: by team decision, a queued report
+# cannot be removed individually, only by clearing the entire queue.
 
 
 def _build_report(
@@ -62,9 +62,9 @@ def _build_report(
     )
 
 def _to_response(report: Report, position: int) -> dict:
-    """Report -> datos de ReportResponse. Se arma a mano porque el
-    schema expone station_id y la posición, que no son atributos directos
-    de Report."""
+    """Report -> ReportResponse data. Built manually because the
+    schema exposes station_id and the position, which are not direct attributes
+    of Report."""
     return {
         "position": position,
         "event_id": report.event_id,
@@ -79,7 +79,7 @@ def _to_response(report: Report, position: int) -> dict:
 
 
 def _raise_http(error: Exception):
-    """Traduce los errores de dominio al mismo criterio de los otros
+    """Translates domain errors to the same criteria as other
     routers: KeyError -> 404, ValueError -> 409."""
     if isinstance(error, KeyError):
         raise HTTPException(
@@ -101,7 +101,7 @@ def enqueue_report(
     data: ReportCreate,
     scenario: Scenario = Depends(get_scenario),
 ):
-    """Prepara un reporte: lo agrega al final de la cola sin procesarlo."""
+    """Prepares a report: adds it to the end of the queue without processing it."""
     try:
         report = _build_report(data, scenario)
         position = scenario.enqueue_report(report)
@@ -119,8 +119,8 @@ def enqueue_report_batch(
     data: ReportBatchCreate,
     scenario: Scenario = Depends(get_scenario),
 ):
-    """Prepara una ráfaga de reportes de N estaciones. Todo o nada: si uno
-    falla, no se encola ninguno."""
+    """Prepares a burst of reports from N stations. All or nothing: if one
+    fails, none are queued."""
     try:
         reports = []
         for item in data.reports:
@@ -136,7 +136,7 @@ def enqueue_report_batch(
 
 @router.get("", response_model=list[ReportResponse])
 def list_reports(scenario: Scenario = Depends(get_scenario)):
-    """Cola completa en orden de recepción (position 1 = el próximo)."""
+    """Complete queue in order of reception (position 1 = the next one)."""
     return [
         _to_response(report, position)
         for position, report in enumerate(scenario.list_reports(), start=1)
@@ -145,7 +145,7 @@ def list_reports(scenario: Scenario = Depends(get_scenario)):
 
 @router.delete("", response_model=ReportQueueCleared)
 def clear_report_queue(scenario: Scenario = Depends(get_scenario)):
-    """Vacía la cola completa y devuelve cuántos reportes se descartaron."""
+    """Empties the entire queue and returns how many reports were discarded."""
     return {"removed": scenario.clear_report_queue()}
     
     

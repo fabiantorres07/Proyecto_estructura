@@ -1,22 +1,22 @@
 class BSTNode:
-    """Nodo del árbol BST de comparación (sin balanceo).
+    """Node of the comparison BST tree (without balancing).
 
-    Guarda una referencia al MISMO objeto Event que usa el AVL (no una
-    copia): así los dos árboles comparten la identidad del evento, como
-    exige el enunciado, y una corrección aplicada al Event se ve igual
-    desde ambos árboles.
+    Keeps a reference to the SAME Event object used by the AVL (not a
+    copy): this way both trees share the event's identity, as
+    required by the prompt, and a correction applied to the Event looks the same
+    from both trees.
 
-    No guarda `parent` ni `height`:
-    - `parent` no hace falta porque en un BST sin balanceo ninguna
-      operación necesita "subir" después de terminar: insertar y
-      eliminar son un único recorrido de bajada, y el padre se lleva en
-      una variable local durante ese recorrido (ver BSTTree.delete).
-    - `height` no hace falta porque ningún algoritmo de este árbol la
-      consulta a mitad de una operación (no hay factor de balance ni
-      rotaciones). La altura se calcula bajo demanda en BSTTree.height().
+    Does not keep `parent` or `height`:
+    - `parent` is not needed because in a BST without balancing no
+      operation needs to "go up" after finishing: insert and
+      delete are a single downward traversal, and the parent is carried in
+      a local variable during that traversal (see BSTTree.delete).
+    - `height` is not needed because no algorithm of this tree queries it
+      in the middle of an operation (there is no balance factor or
+      rotations). The height is calculated on demand in BSTTree.height().
     """
 
     def __init__(self, event, left_son=None, right_son=None):
-        self.event = event          # Event almacenado (misma instancia que en el AVL).
-        self.left_son = left_son    # Subárbol izquierdo: claves menores (BSTNode o None).
-        self.right_son = right_son  # Subárbol derecho: claves mayores (BSTNode o None).
+        self.event = event          # Stored Event (same instance as in the AVL).
+        self.left_son = left_son    # Left subtree: smaller keys (BSTNode or None).
+        self.right_son = right_son  # Right subtree: larger keys (BSTNode or None).
