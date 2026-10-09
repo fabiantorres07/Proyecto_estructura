@@ -44,8 +44,8 @@ INFRASTRUCTURE: Methods that are important for the project but are not specific 
 class Scenario:
 
     def __init__(self, metrics : Optional[dict[str, int]] = None,avl_tree: Optional[AVLTree] = None, bst_tree: Optional[BSTTree] = None, 
-                 event_index : Optional[dict[int, AVLNode]] = None, stations : Optional[dict[str, Station]] = None, zones: Optional[list[Zone]] = None, 
-                 eliminated_IDs: Optional[set[int]] = None, archived_history: Optional[dict[int, Event]] = None, referenced_by=None, simulation_clock: Optional[datetime] = None, 
+                event_index : Optional[dict[int, AVLNode]] = None, stations : Optional[dict[str, Station]] = None, zones: Optional[list[Zone]] = None, 
+                eliminated_IDs: Optional[set[int]] = None, archived_history: Optional[dict[int, Event]] = None, referenced_by=None, simulation_clock: Optional[datetime] = None, 
                 L: int=3, W: float = 48.0, R: float = 40.0, T: float = 72.0, mode: Mode = Mode.NORMAL, undo_stack: Optional[Stack] = None, report_queue: Optional[Queue] = None, versions: Optional[dict[str, dict]] = None):
 
         # Collections for elimination and history.
@@ -278,7 +278,7 @@ class Scenario:
 
         # 3. Keep only those that truly change. Nothing changed -> no action.
         changed = {name: value for name, value in changes.items()
-                   if getattr(self, name) != value}
+                if getattr(self, name) != value}
         if not changed:
             return {}
         old_values = {name: getattr(self, name) for name in changed}
