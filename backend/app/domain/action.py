@@ -8,39 +8,52 @@ from typing import Optional
 from app.domain.report import Report
 
 
-"ACTION CLASS"
-"""Each type of operation must be undone separately. There are ten: create, correct, delete, archive branch, change parameters, advance clock, change attention status, load scenario, global recovery, and each queue step."""
+"""Action classes for the undo/redo stack (section 13).
 
-"""Every time the user does something (creates an event, corrects it, etc.), the system saves a note on the stack of what was done. 
-If the user clicks undo, the last note is popped and the opposite is done.
-Their role is only to store data, nothing else. These classes do nothing on their own. Scenario is what creates the notes and uses them to undo."""
+An "action" is a small data container that records what a single user
+operation changed, so Scenario.undo() can revert it later. Actions have
+NO behaviour: they do not modify the scenario, they do not decide
+anything, they do not touch the trees. They are created by Scenario,
+pushed onto Scenario.undo_stack, and read back by Scenario.undo() via
+isinstance() dispatch.
 
-"""CreationAction: only the event id, to be able to remove it.
+What each action stores (the minimum to invert its operation):
 
-CorrectionAction: Action representing a manual correction of an active event.
+    CreationAction         event_id + old references of affected events
+    CorrectionAction       old field values + old references of affected events
+    ReactivationAction     same as CorrectionAction, but the "before" state
+                           was being archived, not being in the AVL
+    DeletionAction         the complete Event + old references
+    MassArchiveAction      archived subtree root + where it hung from
+    ParameterChangeAction  name(s) and old value(s) of the changed parameter(s),
+                           plus old references if W or R changed
+    ClockAdvanceAction     the previous simulation clock value
+    AttentionChangeAction  the previous attention status
+    LoadAction             the entire previous scenario state
+    GlobalRecoveryAction   topology snapshot + rotation delta + previous mode
+    QueueStepAction        the processed Report, its position, and the inner
+                           action (create / correct / reactivate) it produced
+    ClearReportQueueAction the reports that were in the queue when cleared
+    ReportEnqueueAction    the report(s) added to the queue
+    ZoneAction             zone CRUD operation (create / update / delete)
+    StationAction          station CRUD operation (create / update / delete)
 
-DeletionAction: the complete event, because once deleted it no longer exists anywhere else.
+Most actions also carry:
 
-MassArchiveAction: the archived branch and where it hung from, to be able to reattach it.
+    tree_checkpoint   shape of AVL/BST before the operation + rotation
+                      metric deltas. Restored as-is on undo (section 13).
+    counter_delta     what the operation added to section 14 counters.
+                      Subtracted on undo.
 
-ParameterChangeAction: which parameter changed (L, W, R, or T) and its old value.
-
-ClockAdvanceAction: the old clock time.
-
-AttentionChangeAction: the old status (pending or reviewed).
-
-LoadAction: a copy of the entire previous scenario. The general rule is to store the minimum, but this is the exception because loading a file replaces everything.
-
-GlobalRecoveryAction: a snapshot of the tree shape before repairing it, to restore it identically on undo.
-
-QueueStepAction: the processed report, its queue position, and the inner action (create or correct) it produced."""
-
-"""Each operation needs to store different things to be able to undo. A correction stores old values, 
-a deletion stores the complete event, and the clock stores a timestamp."""
-
-
-
-
+Why LoadAction is the exception
+-------------------------------
+Every other action stores the minimum. LoadAction stores a reference to
+the entire previous scenario state, because a load replaces everything.
+The reference is kept (not deep-copied) because a load never mutates the
+old state: it builds a new one. Previous actions hold live references to
+real nodes of that old state, and their identity must be preserved across
+the load, or undoing them after undoing the load would break.
+"""
 
 
 class CreationAction:
@@ -79,13 +92,13 @@ class CreationAction:
         # same topology and same metrics (section 13).
         self.tree_checkpoint = tree_checkpoint
 
+
 class CorrectionAction:
     """Action representing a manual correction of an active event.
 
     Pushed to Scenario.undo_stack after correct_event completes
     successfully. On undo, Scenario must be able to revert EVERYTHING that
     the correction changed, not just the event data.
-
 
     The first version of CorrectionAction only stored the event id.
     That was insufficient for three reasons that arose when
@@ -121,10 +134,8 @@ class CorrectionAction:
        pattern used by CreationAction: a dict {event_id: reference_id}
        with the previous snapshot of each affected event.
 
-    ──────────────────────────────────────────────────────────────
     Why does Scenario need this?
-    ──────────────────────────────────────────────────────────────
-
+    ----------------------------
     Scenario.undo() pops from the stack and decides with isinstance() what
     to revert. For a CorrectionAction it needs to know:
 
@@ -142,14 +153,6 @@ class CorrectionAction:
         change are immutable (float, bool, int, enum) and storing them
         individually suffices. There are no lists or sets that can be mutated
         accidentally.
-
-    ──────────────────────────────────────────────────────────────
-    Summary
-    ──────────────────────────────────────────────────────────────
-
-    Stores only the minimum needed to return to the exact previous state:
-    fields that apply_correction could have touched, and previous
-    references of events whose associations changed.
     """
 
     def __init__(
@@ -249,6 +252,7 @@ class DeletionAction:
     Also stores old references of events affected by the
     deletion (those having the deleted event as reference), to be able
     to restore them on undo."""
+
     def __init__(self, event: Event, old_references: dict[int, int | None],
                  tree_checkpoint: Optional[dict] = None):
         self.event = event
@@ -258,6 +262,7 @@ class DeletionAction:
         # (see Scenario._tree_checkpoint). On undo it is restored as-is:
         # same topology and same metrics (section 13).
         self.tree_checkpoint = tree_checkpoint
+
 
 class MassArchiveAction:
     """Stores the root of the subtree that was archived in bulk, its former
@@ -271,6 +276,7 @@ class MassArchiveAction:
     ({"mass_archives": 1, "archived_events": branch size}). Subtracted
     on undo with Scenario._revert_counters(delta).
     """
+
     def __init__(self, archived_root: AVLNode, former_parent: Optional[AVLNode],
                  was_left_child: Optional[bool], event_ids: list[int],
                  rotation_delta: dict = None, counter_delta: dict = None,
@@ -286,7 +292,8 @@ class MassArchiveAction:
         # (see Scenario._tree_checkpoint). On undo it is restored as-is:
         # same topology and same metrics (section 13).
         self.tree_checkpoint = tree_checkpoint
-        
+
+
 class ParameterChangeAction:
     """Stores the name of the global parameter (L, W, R, or T), its previous
     value, and — when the parameter affects associations (W or R) —
@@ -318,21 +325,56 @@ class ParameterChangeAction:
         # "undo". parameter_name has the joined names ("W,R").
         self.old_values = old_values or {parameter_name: old_value}
 
+
 class ClockAdvanceAction:
-    """Stores the previous simulation clock value before advancing it, to be able to rewind it on undo."""
+    """Records the previous simulation clock, so undo can rewind it.
+
+    Advancing the clock is one-directional (update_simulation_clock refuses
+    to move it backwards). Undo is the only way to move it back, and to do
+    so it needs the exact old value. A datetime is immutable, so storing
+    it directly is safe.
+    """
+
     def __init__(self, old_clock: datetime):
         self.old_clock = old_clock
 
-"""Stores the previous attention status of an event before a manual attention change, to be able to restore it."""
+
 class AttentionChangeAction:
+    """Records the previous attention status of an event, so undo can
+    restore it.
+
+    Only one field changes when an event is marked as reviewed
+    (attention_status). The key, the tree position, and the associations
+    are untouched, so nothing else needs to be stored. The event is found
+    on undo with _find_any_event(event_id), which is why the id is saved
+    even though it is not strictly needed to identify the field.
+    """
+
     def __init__(self, event_id: int, old_attention_status: AttentionStatus):
         self.event_id = event_id
         self.old_attention_status = old_attention_status
 
-"""Stores the full previous state of the scenario before loading a new one (by file or topology). It is an exception to the proportional cost rule because the action itself replaces the entire state."""
+
 class LoadAction:
+    """Records the entire scenario state before a load, so undo can
+    restore it.
+
+    This action is the exception to the "store only the minimum" rule:
+    loading a file (or restoring a version) replaces every operational
+    attribute of the scenario, so the only thing that can be stored is
+    the whole previous state.
+
+    `previous_state` is a REFERENCE, not a deep copy. A load never mutates
+    the old state (it builds a new one and assigns it to self), so keeping
+    the reference is both safe and required: previous actions hold live
+    references to real nodes of that old state, and their identity must be
+    preserved across the load. See Scenario._snapshot_full_state and
+    Scenario._restore_full_state for the shape of the dict.
+    """
+
     def __init__(self, previous_state):
         self.previous_state = previous_state
+
 
 class GlobalRecoveryAction:
     """Stores the state of the AVL before a global recovery, to
@@ -360,13 +402,40 @@ class GlobalRecoveryAction:
         self.avl_tree.revert_rotation_metrics(action.rotation_delta)
         self.mode = action.previous_mode
     """
+
     def __init__(self, topology_snapshot: AVLTopologySnapshot, rotation_delta: dict[str, int], previous_mode=None):
         self.topology_snapshot = topology_snapshot
         self.rotation_delta = rotation_delta
         self.previous_mode = previous_mode
 
-"""Stores the processed report and its queue position, along with the inner action produced by that step (creation or correction) and the confirmed station if applicable, to be able to revert the processing of that report and return it to its position in the queue."""
+
 class QueueStepAction:
+    """Records the processing of ONE report from the queue.
+
+    Pushed by Scenario.process_next_report() after the report has been
+    dequeued. On undo, the step must be reversed in this order:
+
+      1. Remove the confirmed station from the event (if any), while the
+         event still exists.
+      2. Revert the inner action (creation / correction / reactivation)
+         by calling the matching _undo_* helper.
+      3. Return the report to its original queue position.
+
+    Why inner_action
+    ----------------
+    A queue step is ONE action for the user, but internally it can trigger
+    another operation (create_event, correct_event, archived_reactivation),
+    each of which pushes its own action. To avoid two "undo" presses per
+    step, process_next_report pops that inner action and stores it here.
+    The stack sees only the QueueStepAction; this action carries the inner
+    one inside.
+
+    counter_delta holds only what the STEP itself added to section 14
+    counters (conflict or discarded report). An inner correction or
+    reactivation stores its count in inner_action, not here, to avoid
+    counting it twice on undo.
+    """
+
     def __init__(
         self,
         report: Report,
@@ -386,18 +455,49 @@ class QueueStepAction:
 
 
 class ClearReportQueueAction:
+    """Records the reports that were in the queue when clear_report_queue()
+    removed them, so undo can put them back in their original order.
+
+    The whole queue is cleared as ONE action. If the queue was empty,
+    clear_report_queue() does NOT push an action (nothing changed), so
+    this class is only instantiated when there was something to clear.
+    """
+
     def __init__(self, reports: list[Report]):
         self.reports = reports
 
 
 class ReportEnqueueAction:
-  def __init__(self, reports: list[Report], batch: bool):
-    self.reports = reports
-    self.batch = batch
+    """Records the report(s) that were added to the queue, so undo can
+    remove them.
+
+    batch=False -> a single report was enqueued (enqueue_report).
+    batch=True  -> a burst of reports was enqueued at once
+                   (enqueue_reports). The whole burst is undone as one
+                   action, matching the atomicity of the enqueue.
+
+    On undo, the reports are removed by identity, not by position,
+    because other reports may have been enqueued after them.
+    """
+
+    def __init__(self, reports: list[Report], batch: bool):
+        self.reports = reports
+        self.batch = batch
 
 
 class ZoneAction:
-    def __init__(self, operation: str, old_zone: Optional[Zone], new_zone: Optional[Zone], index: int):
+    """Records a zone CRUD operation (create / update / delete), so undo
+    can reverse it.
+
+    operation  : "create" | "update" | "delete"
+    old_zone   : the zone before the operation (None for "create")
+    new_zone   : the zone after the operation (None for "delete")
+    index      : position in the zones list, so undo restores order
+                 exactly (list order matters to the UI)
+    """
+
+    def __init__(self, operation: str, old_zone: Optional[Zone],
+                 new_zone: Optional[Zone], index: int):
         self.operation = operation
         self.old_zone = old_zone
         self.new_zone = new_zone
@@ -405,7 +505,22 @@ class ZoneAction:
 
 
 class StationAction:
-    def __init__(self, operation: str, old_station: Optional[Station], new_station: Optional[Station], index: int):
+    """Records a station CRUD operation (create / update / delete), so
+    undo can reverse it.
+
+    operation   : "create" | "update" | "delete"
+    old_station : the station before the operation (None for "create")
+    new_station : the station after the operation (None for "delete")
+    index       : position in the stations dict, so undo restores order
+                  exactly (the UI shows them in insertion order)
+
+    Note on "update" with a changed id: undo removes the new id and
+    reinserts the old one at the saved index, because the identity of a
+    station is its id (Station.__eq__ / __hash__).
+    """
+
+    def __init__(self, operation: str, old_station: Optional[Station],
+                 new_station: Optional[Station], index: int):
         self.operation = operation
         self.old_station = old_station
         self.new_station = new_station

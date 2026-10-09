@@ -2730,69 +2730,117 @@ class Scenario:
         return data
 
     def load_scenario(self, data: dict, from_version: bool = False) -> dict:
-        """Loads the scenario from a JSON file as an action that can be undone.
+        """Load a full scenario from a JSON-like dict, as an undoable action.
 
-        It receives the JSON in a dictionary format, reads the archive that the user chooses.
+        Validates the input completely before touching the current state. If
+        anything is wrong, raises ValueError with the exact location of the
+        problem and the current scenario is left untouched. If everything is
+        valid, replaces the operational state with the new one and pushes a
+        LoadAction so the previous state can be restored with undo().
 
-        It validates that everything is right, and then it loads. The new state builds new
-        objects. The scenario desn't modify itself unless everything has been validated.
-        
-        If something fails, a ValueError gets thrown, showing exactly what caused the error and stops loading
-        inmediatly
+        Parameters
+        ----------
+        data : dict
+            The archive content, already parsed from JSON. Must follow the
+            schema described below.
+        from_version : bool, default False
+            True when the source is a saved version (self.versions), False
+            when it is an arbitrary file. This only affects one rule: a
+            version saved in Stress mode with an unbalanced topology can be
+            restored as-is, while an arbitrary file with the same topology is
+            rejected unless the current scenario is already in Stress mode.
 
-        if everything gets validated:
-        
-        1. previous_state = self._snapshot_full_state()
-        2. self._restore_full_state(new_state)
-        3. self.undo_stack.push(LoadAction(previous_state))
+        Returns
+        -------
+        dict
+            A short summary of the loaded scenario:
+            - load_mode, mode
+            - active_events, archived_events, eliminated_ids, queued_reports
+            - warnings: non-fatal messages (for example, unbalanced topology
+            loaded in Stress mode)
+            - inherited: names of the optional sections that were not present
+            in the file and were taken from the current scenario
+            - avl, bst: root_id, height, max_depth and leaves of each tree
 
-        SCHEMA OF THE ARCHIVE
+        Raises
+        ------
+        ValueError
+            If the archive is malformed, has inconsistent references, has
+            duplicated ids, has invalid ranges/dates, or violates any
+            structural rule. The message always starts with "Carga
+            rechazada." and points to the exact section (for example
+            "avl.nodes[3]") and the reason.
 
-        {
-          "load_mode": "insertions" | "topology",        (mandatory)
-          "simulation_clock": "2026-09-07T12:00:00Z",    (optional)
-          "parameters": {"L": 3, "W": 48, "R": 40, "T": 72},  (optional)
-          "zones": [{"name", "x_min", "x_max", "y_min", "y_max",
-                     "is_populated"}],                   (optional)
-          "stations": [{"station_id", "x", "y"}],        (optional)
-          ... And the required for each mode
-        }
+        Undo behaviour
+        --------------
+        Load is undoable as a single action. When it succeeds, it does:
+            1. previous_state = self._snapshot_full_state()
+            2. self._restore_full_state(new_state)
+            3. self.undo_stack.push(LoadAction(previous_state))
+        The previous state is kept by reference (not deep-copied), because
+        the load never mutates it: it builds a brand-new state and assigns it
+        to self. Actions pushed before the load (for example a
+        MassArchiveAction) hold references to the real nodes of the old
+        state, so preserving identity is required for those actions to still
+        work after undoing the load.
 
-        The optional features that aren't included will take the current scenario values.
-        This values will be informed as "inherited"
+        Archive schema
+    --------------
+        Common fields:
+            load_mode        : "insertions" | "topology"  (required)
+            simulation_clock : ISO 8601 with timezone, e.g. "2026-09-07T12:00:00Z"
+            parameters       : {"L", "W", "R", "T"}
+            zones            : [{"name", "x_min", "x_max", "y_min", "y_max",
+                                "is_populated"}]
+            stations         : [{"station_id", "x", "y"}]
 
-        Mode "insertions":
-          "events": [{"event_id", "magnitude", "depth", "x", "y",
-                      "occurred_at", "station_id"}, ...]
-          They get inserted in that order, with active balancing in an AVL and BST
-          (create_event: revision 1, pending, asotiations). remains in normal mode
-          without history, deleted or queue. The metrcis begin in zero plus the rotations 
-          made during the load of the file.
+        Every optional field that is omitted is inherited from the current
+        scenario. The names of the inherited fields are reported in the
+        result under "inherited". Inherited containers (zones, stations) are
+        copied into NEW containers so they cannot be mutated by accident
+        through the state saved in LoadAction.
 
-        Mode "topology" (the full structural load):
-          "avl": {"root_id": int | null,
-                  "nodes": [{"event_id", "magnitude", "depth", "x", "y",
-                             "occurred_at", "revision", "stations": [ids],
-                             "attention_status": "pending" | "reviewed",
-                             "priority", "height", "balance_factor",
-                             "left_id": int | null, "right_id": int | null,
-                             "reference_id" (optional, gets verified)}]},
-          "archived": [{Same data as the real event, but without associations}],  (optional)
-          "eliminated_ids": [int],                                (optional)
-          "report_queue": [{"event_id", "revision_num", "station_id",
-                            "magnitude", "depth", "x", "y",
-                            "occurred_at"}],                      (optional)
-          "mode": "Normal" | "Stress",                            (optional)
-          "metrics": {"LL": 0, ...}                               (optional)
+        Mode "insertions"
+        -----------------
+            events : [{"event_id", "magnitude", "depth", "x", "y",
+                    "occurred_at", "station_id"}, ...]
 
-          The topology loads without reinsertions, the associations get rebuilt with the same
-          deterministic policy (if the file contains reference_id, it must match). The BST
-          rebuilds itself inserting in preorder in the AVL, so it has the same shape as the loaded AVL.
+            Each event is inserted in order using create_event, which means
+            the AVL rebalances and the BST follows. The resulting scenario
+            stays in Normal mode and starts with:
+            - revision 1, status pending, associations rebuilt
+            - no archived events, no eliminated ids, no queued reports
+            - metrics reset to zero plus the rotations produced by this load
 
-        Dates: text with the ISO 8601  format with timezone ("...Z") or datetime.
+        Mode "topology"
+        ---------------
+            avl : {
+                "root_id": int | null,
+                "nodes": [{
+                    "event_id", "magnitude", "depth", "x", "y",
+                    "occurred_at", "revision", "stations": [ids],
+                    "attention_status": "pending" | "reviewed",
+                    "priority", "height", "balance_factor",
+                    "left_id": int | null,
+                    "right_id": int | null,
+                    "reference_id" (optional; if present, it is verified)
+                }]
+            }
+            archived       : [event dict, same shape as a real event]
+            eliminated_ids : [int]
+            report_queue   : [{"event_id", "revision_num", "station_id",
+                            "magnitude", "depth", "x", "y", "occurred_at"}]
+            mode           : "Normal" | "Stress"
+            metrics        : {"LL": 0, ...}
 
-        Returns a resume: load_mode, mode, cantidades, warnings,
-        inherited, and root/height/maximum depth/leafs from both trees"""
+            The topology is restored without reinserting. The BST is rebuilt
+            by inserting the AVL nodes in preorder, so it ends with the same
+            shape as the loaded AVL. Stored priority, height, balance factor
+            and (if present) reference_id are checked against the values
+            computed from the file. Dates must be ISO 8601 with timezone,
+            either as strings or as datetime objects.
+        """
+
         if not isinstance(data, dict):
             raise self._load_error("archivo", "el contenido debe ser un objeto JSON")
 
@@ -2825,7 +2873,6 @@ class Scenario:
             "avl": self._load_tree_summary(self.avl_tree),
             "bst": self._load_tree_summary(self.bst_tree),
         }
-
     # ---------------- LOAD HELPERS ----------------
 
     _INSERTION_EVENT_FIELDS = ("event_id", "magnitude", "depth", "x", "y", "occurred_at", "station_id")
